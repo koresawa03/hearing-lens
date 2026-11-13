@@ -151,7 +151,7 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(!engine.isRunning && !engine.canStart)
+            .disabled(engine.isStopping || (!engine.isRunning && !engine.canStart))
 
             if !engine.canStart && !engine.isRunning {
                 Text("ヘッドホンを接続するか、テスト音源モードをオンにしてください。")
@@ -182,7 +182,7 @@ struct ContentView: View {
 
             // Bluetooth は遅延が大きいので有線を勧める
             if engine.isBluetoothOutput {
-                Label("Bluetooth は音が約0.15秒遅れて届くため、自分の声が話しにくく感じることがあります。有線ヘッドホンがおすすめです。",
+                Label("有線ヘッドホン推奨（Bluetooth は約150msの遅延）。Bluetooth だと音が遅れて届くため、自分の声が話しにくく感じることがあります。",
                       systemImage: "info.circle")
                     .font(.footnote)
             }

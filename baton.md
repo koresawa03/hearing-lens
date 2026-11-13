@@ -2,18 +2,20 @@
 
 最終更新: 2026-11-13
 
-1. **現在地**: フェーズ2「音響エンジン」の実装が完了（ブランチ `feat/f01-audio-engine`）。`HearingAudioEngine` にノードグラフ・applyFilter・安全設計（リミッター / 上限0.6 / フェードイン）・権限/割り込み/ルート処理を実装し、`ContentView` に開始/停止・権限案内・エラー・Bluetooth 注意を追加。xcodebuild は BUILD SUCCEEDED（自作コードの警告なし）。teach.md 第3・4章、detail.md、todo.md、update.md も更新済み。
-2. **進行中の作業**: なし。未コミット（コミットとpushはメインが行う）。
+1. **現在地**: フェーズ2-A「音響エンジンの土台と安全まわり」の実装が完了（ブランチ `feat/f01-audio-engine-foundation`、PR #2 のブランチから作成）。低遅延化（IO バッファ5ms・48kHz、実値をログ出力）、入力ソース別セッション、内蔵マイク固定・HFP 除外、EQ 4バンド固定、フェードアウト停止と即停止の使い分け、ルート変更の理由別処理を実装。xcodebuild は BUILD SUCCEEDED（自作コードの警告なし）。design.md 4・5章、ADR-0003、teach.md 第3・4章、detail.md、todo.md、update.md、aim.md も更新済み。
+2. **進行中の作業**: なし。未コミット（コミット・push・新しいドラフトPR作成・PR #2 のクローズはメインが行う）。
 3. **次にやること**:
-   - 変更をコミットして `feat/f01-audio-engine` を push、ドラフトPR
-   - 実機＋有線ヘッドホンで聴感確認（必ず低い端末音量から）、フィルタ値・`maxOutputVolume`・リミッターの調整（todo.md フェーズ2の最後の項目は未チェック）
-   - その後フェーズ3（F-02 日常モード・波形ビジュアライザー）へ。F-04 の RMS メーター（`inputLevel` に TODO(F-04)）と F-07 の声ループも後続
-4. **重要な決定事項**: ADR-0001（.swiftpm・外部依存と音声アセットなし）、ADR-0002（リミッター＋音量上限）。ノイズは AVAudioSourceNode（`PinkNoiseGenerator`、`@unchecked Sendable`、`nonisolated` ファクトリで MainActor 隔離を避ける）。ノードは init で attach、start で connect。テスト音源モードはマイクを接続せず、ノイズ音量を最低 0.3 にする（F-07 で声ループに置き換え予定）。
+   - 変更をコミットして push、新しいドラフトPRを作り、PR #2 をクローズ
+   - 実機＋有線ヘッドホンで確認（update.md 2026-11-13 17:00 の「実機テスト手順」。低い端末音量から）。実際の ioBufferDuration / sampleRate をログで確認
+   - フェーズ2-B: 値のランプ、F-05 緩和の作り込み、聴感チューニング、リミッターしきい値、フィルタ傾斜（12dB/oct が弱いので多段化を検討）
+   - その後フェーズ3（F-02 日常モード・波形ビジュアライザー）。F-04 の RMS メーターと F-07 の話し声（AVAudioPlayerNode を sourceMixer に追加）も後続
+4. **重要な決定事項**: ADR-0001（.swiftpm・外部依存と音声アセットなし）、ADR-0002（リミッター＋音量上限）、ADR-0003（低遅延・入力ソース別セッション・内蔵マイク固定・HFP 除外）。EQ は `EQBand` の4バンド固定でつなぎ直さない。ユーザー操作の停止はフェードアウト、抜去・割り込み・構成変更は即停止。`.newDeviceAvailable` は自動で開始しない。ノイズは AVAudioSourceNode のまま。
 5. **ハマりポイント**:
    - 聴覚過敏の +18dB は耳を傷める危険。リミッターと音量上限なしで実機テストしない
    - Bluetooth は遅延が大きい（約150ms）。テストは有線ヘッドホン推奨
    - シミュレーターにはヘッドホンがないので、音はテスト音源モードか実機で確認
    - xcodebuild の destination は実在するシミュレーター名（例: `platform=iOS Simulator,name=iPhone 17`）
+   - OS は希望のバッファ時間・サンプルレートに丸めることがある。必ずログで実値を確認
    - リミッターのしきい値は既定のまま（未調整）
    - SSC の提出要項で生成AI利用の申告欄があるか確認する
-6. **参照すべきドキュメント**: aim.md、docs/design.md（4章・5章）、docs/adr/0002、tasks/todo.md フェーズ2〜3、update.md（2026-11-13 16:20 のエントリ）、teach.md 第3・4章
+6. **参照すべきドキュメント**: aim.md、docs/design.md（4章・5章）、docs/adr/0002・0003、tasks/todo.md フェーズ2-A・2-B、update.md（2026-11-13 17:00 のエントリ）、teach.md 第3・4章

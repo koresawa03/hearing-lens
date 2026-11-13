@@ -2,16 +2,22 @@
 //
 // ノードグラフ（音の流れ）:
 //   inputNode ──┐
-//               ├→ sourceMixer → eq(3バンド) → reverb → limiter(ピークリミッター) → mainMixerNode → 出力
+//               ├→ sourceMixer → eq(4バンド固定) → reverb → limiter(ピークリミッター) → mainMixerNode → 出力
 //   noiseNode ──┘
+//   （F-07 の話し声は、後で AVAudioPlayerNode を sourceMixer に追加する予定）
 // - ノードは init で一度だけ作って attach し、start() のたびに connect し直す
 //   （入力フォーマットが「今のルート」で変わるため）。
-// - フィルタ値の変更は applyFilter が各ノードのパラメーターを書き換えるだけなので、
-//   エンジンを止めずに切り替えられる（音切れしにくい）。
+// - EQ は役割の決まった4バンドを最初から持ち、使わないバンドは bypass にする。
+//   プロファイル切替は各バンドの値を書き換えるだけで、ノードをつなぎ直さない（音切れ防止）。
+// - 低遅延（ADR-0003）: IO バッファを約5msに小さくして、自分の声が遅れて返る遅延を減らす。
+// - 入力ソース別セッション（ADR-0003）: マイクは .playAndRecord + A2DP、テスト音源は .playback。
+//   入力は内蔵マイクに固定し、通話用の HFP は使わない。
 // - 聴覚保護（ADR-0002）: リミッター + 出力音量の上限 + 0 からのフェードイン。
+//   ユーザー操作の停止は短いフェードアウト、ヘッドホン抜去・割り込み・構成変更は即停止。
 import AVFoundation
 import AudioToolbox
 import Observation
+import os
 
 /// F-04 声量フィードバックの種類
 enum VolumeFeedback {
@@ -70,6 +76,24 @@ private nonisolated func makeNoiseNode(format: AVAudioFormat) -> AVAudioSourceNo
     }
 }
 
+/// EQ の固定バンド。役割を決めておき、プロファイル切替でもつなぎ直さない。
+///
+/// | バンド | 種類 | 使うプロファイル |
+/// |---|---|---|
+/// | highPass | ハイパス | 低音難聴 |
+/// | lowPass | ローパス | 高音難聴 |
+/// | bandPass | バンドパス | APD |
+/// | peak | パラメトリック（ピークEQ） | 聴覚過敏 |
+private enum EQBand: Int, CaseIterable {
+    case highPass   // band0: 低い音を削る
+    case lowPass    // band1: 高い音を削る
+    case bandPass   // band2: 中域だけ通す
+    case peak       // band3: 特定の帯域を持ち上げる
+}
+
+/// デバッグ用ログ。Xcode のコンソールで category "audio" を見る
+private let audioLogger = Logger(subsystem: "com.koresawa.HearingLens", category: "audio")
+
 @Observable
 @MainActor
 final class HearingAudioEngine {
@@ -79,6 +103,8 @@ final class HearingAudioEngine {
     }
     var mode: ExperienceMode = .daily
     private(set) var isRunning = false
+    /// フェードアウト中（停止処理の途中）。UI はこの間ボタンを無効にする
+    private(set) var isStopping = false
     private(set) var isHeadphoneConnected = false
     /// 出力が Bluetooth か（遅延が大きいので UI で注意を出す）
     private(set) var isBluetoothOutput = false
@@ -87,7 +113,7 @@ final class HearingAudioEngine {
             applyFilter(currentFilter)
             // セッションのカテゴリがモードと食い違わないよう、稼働中に切り替わったら止める（再開はユーザー操作）
             if isRunning && useTestSource != oldValue {
-                stop()
+                stopImmediately()
             }
         }
     }
@@ -116,8 +142,15 @@ final class HearingAudioEngine {
     private static let fadeInDuration: Double = 0.5
     /// フェードインの分割数。0.5秒を10段階に分けて少しずつ上げる
     private static let fadeInSteps = 10
-    /// AVAudioSession の入出力バッファ時間（秒）。小さいほど遅延が減る（5ms）
+    /// フェードアウトの総時間（秒）。ユーザー操作で止めるときの「ブツッ」という音を避ける
+    private static let fadeOutDuration: Double = 0.15
+    /// フェードアウトの分割数。0.15秒を6段階に分けて少しずつ下げる
+    private static let fadeOutSteps = 6
+    /// AVAudioSession の入出力バッファ時間（秒）。小さいほど遅延が減る（約5ms）。
+    /// 自分の声が遅れて返ると話しにくい（遅延聴覚フィードバック）ため。小さすぎると音切れするので 5ms にする（ADR-0003）
     private static let preferredIOBufferDuration: TimeInterval = 0.005
+    /// 希望するサンプルレート（Hz）。48kHz は iPhone の内蔵マイク・スピーカーの標準的な値
+    private static let preferredSampleRate: Double = 48_000
     /// テスト音源モードでの環境ノイズの最低音量。F-07 の声ループが入るまでの仮の「音が出ている」確認用
     private static let testSourceMinimumNoiseVolume: Float = 0.3
     /// ノイズ用ソースノードのサンプルレートが取れない場合の既定値
@@ -144,8 +177,8 @@ final class HearingAudioEngine {
     @ObservationIgnored private let engine = AVAudioEngine()
     /// マイクとノイズを1本にまとめるミキサー
     @ObservationIgnored private let sourceMixer = AVAudioMixerNode()
-    /// 3バンドEQ: band0 = ハイパス / band1 = ローパス / band2 = バンドパス or パラメトリック
-    @ObservationIgnored private let eq = AVAudioUnitEQ(numberOfBands: 3)
+    /// 4バンド固定のEQ。バンドの役割は EQBand を参照
+    @ObservationIgnored private let eq = AVAudioUnitEQ(numberOfBands: EQBand.allCases.count)
     @ObservationIgnored private let reverb = AVAudioUnitReverb()
     /// 出力段のピークリミッター（Apple 標準の AudioUnit）。急な大音量を抑える
     @ObservationIgnored private let limiter = AVAudioUnitEffect(
@@ -188,9 +221,11 @@ final class HearingAudioEngine {
             forName: AVAudioSession.routeChangeNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] notification in
+            // Notification 自体はアクター間で渡せないので、理由の値（UInt）だけ先に取り出す
+            let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
             Task { @MainActor in
-                self?.handleRouteChange()
+                self?.handleRouteChange(reasonValue: reasonValue)
             }
         }
 
@@ -228,9 +263,14 @@ final class HearingAudioEngine {
 
         // 帯域ごとの役割（種類）は固定で、周波数などの値は applyFilter が入れる
         eq.globalGain = 0
-        eq.bands[0].filterType = .highPass
-        eq.bands[1].filterType = .lowPass
-        eq.bands[2].filterType = .bandPass
+        // 種類はここで一度だけ決める。使わない間は bypass にしておく
+        eq.bands[EQBand.highPass.rawValue].filterType = .highPass
+        eq.bands[EQBand.lowPass.rawValue].filterType = .lowPass
+        eq.bands[EQBand.bandPass.rawValue].filterType = .bandPass
+        eq.bands[EQBand.peak.rawValue].filterType = .parametric
+        for band in eq.bands {
+            band.bypass = true
+        }
 
         // 開始前は無音。フェードインで上げる
         engine.mainMixerNode.outputVolume = 0
@@ -238,14 +278,11 @@ final class HearingAudioEngine {
 
     // MARK: F-01 フィルタ適用
     /// FilterParameters をノードの値に写す。エンジンが動いていても止まっていても呼べる。
-    /// 方針: 使わない帯域は bypass にする。
-    /// バンドパスとピークEQが両方指定された場合は、band2 を1つしか持たないのでバンドパスを優先する
-    /// （現在のプロファイルでは同時に指定されない）。
+    /// 方針: 各バンドは役割が固定（EQBand）。使わないバンドは bypass にする。ノードはつなぎ直さない。
     private func applyFilter(_ p: FilterParameters) {
-        // band0: ハイパス
-        let hp = eq.bands[0]
+        // highPass: ハイパス
+        let hp = eq.bands[EQBand.highPass.rawValue]
         if let cutoff = p.highPassCutoff {
-            hp.filterType = .highPass
             hp.frequency = cutoff
             hp.bandwidth = Self.passFilterBandwidth
             hp.bypass = false
@@ -253,10 +290,9 @@ final class HearingAudioEngine {
             hp.bypass = true
         }
 
-        // band1: ローパス
-        let lp = eq.bands[1]
+        // lowPass: ローパス
+        let lp = eq.bands[EQBand.lowPass.rawValue]
         if let cutoff = p.lowPassCutoff {
-            lp.filterType = .lowPass
             lp.frequency = cutoff
             lp.bandwidth = Self.passFilterBandwidth
             lp.bypass = false
@@ -264,22 +300,25 @@ final class HearingAudioEngine {
             lp.bypass = true
         }
 
-        // band2: バンドパス（優先）またはパラメトリック
-        let band = eq.bands[2]
+        // bandPass: バンドパス（APD）
+        let bandPass = eq.bands[EQBand.bandPass.rawValue]
         if let bp = p.bandPass {
-            band.filterType = .bandPass
-            band.frequency = bp.center
-            band.bandwidth = bp.bandwidth
-            band.gain = 0
-            band.bypass = false
-        } else if let peak = p.peakEQ {
-            band.filterType = .parametric
-            band.frequency = peak.frequency
-            band.bandwidth = peak.bandwidth
-            band.gain = peak.gain
-            band.bypass = false
+            bandPass.frequency = bp.center
+            bandPass.bandwidth = bp.bandwidth
+            bandPass.bypass = false
         } else {
-            band.bypass = true
+            bandPass.bypass = true
+        }
+
+        // peak: パラメトリック（聴覚過敏の高域ブースト）
+        let peakBand = eq.bands[EQBand.peak.rawValue]
+        if let peak = p.peakEQ {
+            peakBand.frequency = peak.frequency
+            peakBand.bandwidth = peak.bandwidth
+            peakBand.gain = peak.gain
+            peakBand.bypass = false
+        } else {
+            peakBand.bypass = true
         }
 
         // リバーブ: プリセットがなければ wet を 0 にして素通しにする
@@ -299,11 +338,12 @@ final class HearingAudioEngine {
     }
 
     // MARK: F-06 ヘッドホン検知
+    // HFP（.bluetoothHFP）は通話用で帯域が狭く、高音域の体験が成立しないため含めない（ADR-0003）
     private static let headphonePortTypes: Set<AVAudioSession.Port> = [
-        .headphones, .bluetoothA2DP, .bluetoothLE, .bluetoothHFP, .usbAudio
+        .headphones, .bluetoothA2DP, .bluetoothLE, .usbAudio
     ]
     private static let bluetoothPortTypes: Set<AVAudioSession.Port> = [
-        .bluetoothA2DP, .bluetoothLE, .bluetoothHFP
+        .bluetoothA2DP, .bluetoothLE
     ]
 
     /// 現在の出力ルートにヘッドホン類があるか確認して反映する
@@ -313,20 +353,28 @@ final class HearingAudioEngine {
         isBluetoothOutput = outputs.contains { Self.bluetoothPortTypes.contains($0.portType) }
     }
 
-    private func handleRouteChange() {
+    private func handleRouteChange(reasonValue: UInt?) {
         refreshRoute()
-        // ハウリング防止: ヘッドホンが外れたら即停止（テスト音源は例外）
-        if isRunning && !isHeadphoneConnected && !useTestSource {
-            stop()
+        guard isRunning else { return }
+        let reason = reasonValue.flatMap { AVAudioSession.RouteChangeReason(rawValue: $0) }
+        // ヘッドホンが外れた → ハウリング防止のため、フェードせず即停止
+        if reason == .oldDeviceUnavailable && !isHeadphoneConnected {
+            stopImmediately()
+            return
+        }
+        // 保険: 理由が何であれ、マイクモードでヘッドホンがなければ止める（テスト音源は例外）
+        // .newDeviceAvailable（接続）では何もしない。自動で開始はせず、ユーザー操作を待つ
+        if !useTestSource && !isHeadphoneConnected {
+            stopImmediately()
         }
     }
 
     // MARK: 割り込み（電話・Siri など）
     private func handleInterruption(typeValue: UInt?) {
         guard let typeValue, let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
-        // 開始時は停止する。終了時は急に音が出ないよう、自動再開せずユーザー操作を待つ
+        // 開始時は即停止する。終了時は急に音が出ないよう、自動再開せずユーザー操作を待つ
         if type == .began {
-            stop()
+            stopImmediately()
         }
     }
 
@@ -334,13 +382,13 @@ final class HearingAudioEngine {
     private func handleConfigurationChange() {
         // 自動再開はしない（急に音が出ないように）。停止状態をUIへ反映するだけ
         if isRunning {
-            teardown()
+            stopImmediately()
         }
     }
 
     // MARK: 操作
     func start() async {
-        guard canStart, !isRunning else { return }
+        guard canStart, !isRunning, !isStopping else { return }
         lastErrorMessage = nil
         micPermissionDenied = false
 
@@ -352,7 +400,7 @@ final class HearingAudioEngine {
                 return
             }
             // 権限ダイアログの間に状況が変わったかもしれないので確認し直す
-            guard canStart, !isRunning else { return }
+            guard canStart, !isRunning, !isStopping else { return }
         }
 
         do {
@@ -366,8 +414,21 @@ final class HearingAudioEngine {
                 // .playback にして内蔵スピーカーから出す（ヘッドホンなしの審査員向け）
                 try session.setCategory(.playback, mode: .default, options: [])
             }
+            // OS は希望どおりにしないことがあるので「希望」として伝え、実際の値はログで確認する
+            try session.setPreferredSampleRate(Self.preferredSampleRate)
             try session.setPreferredIOBufferDuration(Self.preferredIOBufferDuration)
             try session.setActive(true)
+            logAudioSession(session)
+
+            if needsMic {
+                // 入力は内蔵マイクに固定する。OS 任せだと Bluetooth などのマイクに切り替わってしまう（ADR-0003）
+                guard let builtInMic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) else {
+                    lastErrorMessage = "内蔵マイクが見つかりませんでした"
+                    stopImmediately()
+                    return
+                }
+                try session.setPreferredInput(builtInMic)
+            }
 
             // カテゴリ変更でルートが変わることがあるので確認し直す
             refreshRoute()
@@ -389,11 +450,34 @@ final class HearingAudioEngine {
             startFadeIn()
         } catch {
             lastErrorMessage = "オーディオを開始できませんでした。ヘッドホンの接続を確認して、もう一度お試しください。"
-            teardown()
+            stopImmediately()
         }
     }
 
+    /// ユーザー操作の停止。短いフェードアウトのあとに止める（クリック音を避ける）
     func stop() {
+        guard isRunning, !isStopping else { return }
+        isStopping = true
+        fadeTask?.cancel() // フェードイン中なら先にやめる
+        let startVolume = engine.mainMixerNode.outputVolume
+        fadeTask = Task { @MainActor [weak self] in
+            let steps = Self.fadeOutSteps
+            let interval = Self.fadeOutDuration / Double(steps)
+            for step in 1...steps {
+                if Task.isCancelled { return }
+                guard let self else { return }
+                let ratio = 1 - Float(step) / Float(steps)
+                self.engine.mainMixerNode.outputVolume = startVolume * ratio
+                try? await Task.sleep(for: .seconds(interval))
+            }
+            // 途中で即停止などに切り替わっていたら何もしない
+            if Task.isCancelled { return }
+            self?.teardown()
+        }
+    }
+
+    /// フェードなしの即停止。ヘッドホン抜去・割り込み・構成変更など、安全のため急いで止める場面で使う
+    private func stopImmediately() {
         teardown()
     }
 
@@ -454,7 +538,18 @@ final class HearingAudioEngine {
         engine.mainMixerNode.outputVolume = 0
         deactivateSession()
         isRunning = false
+        isStopping = false
         inputLevel = 0
+    }
+
+    /// 実際に適用されたバッファ時間・サンプルレート・ルートをログに出す（希望どおりか実機で確認するため）
+    private func logAudioSession(_ session: AVAudioSession) {
+        let route = session.currentRoute
+        let inputs = route.inputs.map { $0.portType.rawValue }.joined(separator: ",")
+        let outputs = route.outputs.map { $0.portType.rawValue }.joined(separator: ",")
+        let ioBuffer = session.ioBufferDuration
+        let sampleRate = session.sampleRate
+        audioLogger.info("ioBufferDuration=\(ioBuffer, privacy: .public)s sampleRate=\(sampleRate, privacy: .public)Hz inputs=\(inputs, privacy: .public) outputs=\(outputs, privacy: .public)")
     }
 
     /// セッションを閉じる。他アプリの音声を元に戻すよう通知する。失敗しても致命的ではないので無視する
