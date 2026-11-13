@@ -52,7 +52,7 @@
 ### F-02 日常モード（S-02）
 - マイク入力にフィルタを適用してヘッドホンへ出力する
 - 表示: 選択中プロファイルの名前と短い説明（shortDescription）。「主な対象世代」「聞こえ方の解説」は ⓘ シートに置く
-- ビジュアライザーは画面中央の波紋（`RippleView`）。フェーズ3で音量に反応させる（今回は静止＋稼働中の呼吸のみ。`level` 0...1 を受け取る口だけ用意）
+- ビジュアライザーは画面中央の球体と波紋（`HeroSphereView`）。フェーズ3で音量に反応させる（今回は静止＋稼働中の呼吸と波紋の広がりのみ。`level` 0...1 を受け取る口だけ用意）
 
 ### F-03 会話モード（S-02）
 F-02 と同じ処理に、話し方のアドバイス（見出し: Tips for talking）を加える。**英語版が正**で、日本語は参考。
@@ -98,16 +98,24 @@ F-02 と同じ処理に、話し方のアドバイス（見出し: Tips for talk
 | ID | 画面 | 概要 |
 |---|---|---|
 | S-01 | オンボーディング | 初回起動の説明シート（英語）。背景・使い方・ヘッドホンと音量の注意・「理解のための近似であり医学的再現ではない」旨（"an approximation for understanding, not a medical simulation"） |
-| S-02 | メイン | 完全モノクロの中央ビジュアル型。上部バー（モード文字切替・ⓘ）、中央の波紋、プロファイル名と説明、会話モードのアドバイス / 実践スイッチ、プロファイル文字タブ、状態1行、音量スライダーと丸い主ボタン |
+| S-02 | メイン | 完全モノクロの中央ビジュアル型。上部バー（モード文字切替・ⓘ）、中央の球体と波紋、プロファイル名と説明、会話モードのアドバイス / 実践スイッチ、プロファイル文字タブ、状態1行、音量スライダーと丸い主ボタン |
 
 ### S-02 メイン画面のレイアウト
 上から順に（詳しい方針は ADR-0004）:
 1. 上部バー: 左に Everyday / Conversation の文字切替（VoiceOver は "Experience mode"）、右に ⓘ（VoiceOver: "About this profile"）
-2. 中央: 波紋（`RippleView`、Canvas の細い同心円）。今回は静止＋稼働中のゆっくりした呼吸のみ。`level`（0...1）を受け取る口だけ用意し、音量への反応はフェーズ3
+2. 中央: 光沢のある球体と、その下の水面に広がる楕円の波紋（`HeroSphereView`）。画像は使わず、すべて SwiftUI で描く。`level`（0...1）と `isActive` を受け取る。音への接続はフェーズ3
+   - 構成: 球体は画面幅の約45%。その下の水面に、扁平な楕円の波紋を5本、同心に置く。外側ほど薄く細くするが、最外周も背景から見える下限の不透明度を持つ
+   - 質感: `RadialGradient` で丸みを出す。細い縁リングは `AngularGradient` で金属調にする。左上に blur した白い楕円のハイライトを置き、下に柔らかい影を落とす
+   - ダーク: 暗い球＋白いハイライト。ライト: 明るい球＋柔らかい影。どちらもグレー階調のみ（有彩色なし）
+   - 動き: `isActive` のときだけ、球体がゆっくり呼吸し、波紋が外へ広がって薄れる。`level` が大きいほど振幅と勢いが増す（音への接続はフェーズ3）。停止中は静止
+   - Reduce Motion: 球体も波紋も完全に静止する
+   - VoiceOver: 装飾なので `accessibilityHidden` にする
+   - 値の集約: 大きさの比率・グラデーションの階調・ハイライト・影・波紋の本数と不透明度・周期などの値は、すべて `Theme.swift` にまとめる
+   - 描画負荷: 球体は Shape＋グラデーションを `drawingGroup` で1枚にまとめて描く。波紋は `Canvas` で1パスで描く。60fps を目標にする
 3. プロファイル名と shortDescription（例: "High sounds and consonants fade, so words blur."）
 4. （会話モードのみ）アドバイスを1つ表示（タップで次へ。VoiceOver ヒント "Double-tap for the next tip"）と、Practice the tips スイッチ
 5. プロファイル文字タブ（横スクロール可）。表示名は短縮名 High-Freq / Low-Freq / APD / Hyperacusis。VoiceOver は正式名（High-Frequency Hearing Loss など）
-6. 状態・注意の1行（主ボタンの上）: ヘッドホン接続状態、Bluetooth の遅延注意、マイク拒否時の案内（"Open Settings" ボタン）、ヘッドホン未接続時は "Connect headphones, or turn on Test Sound in ⓘ"
+6. 状態・注意の1行（主ボタンの上）: ヘッドホン接続状態、Bluetooth の遅延注意、マイク拒否時の案内（"Open Settings" ボタン）、ヘッドホン未接続時は "Plug in headphones or use Test Sound (ⓘ)"（収まらないときは折り返す）
 7. 音量スライダー（Volume。最大値は ADR-0002 の音量上限）と、丸い主ボタン（Start / Stop。VoiceOver は "Start listening" / "Stop listening"）
 - iPad では余白を活かし、中央のビジュアルを大きく取る
 - Dynamic Type・VoiceOver・Reduce Motion に対応する
@@ -131,7 +139,7 @@ F-02 と同じ処理に、話し方のアドバイス（見出し: Tips for talk
 - **文字**: システムフォント・Dynamic Type のテキストスタイルのみ。小見出しは tracking を少し広げる。極端に細いウェイトは使わない
 - **アイコン**: SF Symbols。ウェイトを統一する
 - **余白**: 大きく取り、詰め込まない
-- **動き**: アニメーションは控えめ。Reduce Motion 時は波紋を静止する
+- **動き**: アニメーションは控えめ。Reduce Motion 時は球体と波紋を静止する
 - **値の集約**: 色・余白などの値は `Theme.swift` に集約し、他のファイルに直接書かない
 
 ## 4. オーディオ処理設計

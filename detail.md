@@ -139,15 +139,15 @@
 ### HearingLens.swiftpm/Theme.swift
 - 役割: 完全モノクロ UI（ADR-0004）の色・余白・サイズ・字間・アイコンのウェイトを一か所に集約する。他のファイルは色や余白の数値を直書きせず `Theme` を参照する
 - 主要要素:
-  - `enum Theme`: `background`（ダーク #0E0E10 / ライト #F5F5F3）、`foreground`（ダーク 白 / ライト #111111）。どちらも `UIColor` の dynamic provider で OS のライト/ダークに連動（アセットカタログなし）。`secondary`（前景 65%。コントラスト比は ダーク約 8.4:1・ライト約 5.7:1）、`line`（前景 25%）、`disabledOpacity`、余白スケール（`spaceXS`〜`spaceXL`）、`cornerRadius`、線の太さ、`maxContentWidth`（520）、`rippleMinHeight`、`mainButtonDiameter`（72）、`selectedDotSize`、`minTouchTarget`、`headingTracking`（1.5）、`symbolWeight`、`ripplePeriod`（4秒）
+  - `enum Theme`: `background`（ダーク #0E0E10 / ライト #F5F5F3）、`foreground`（ダーク 白 / ライト #111111）。どちらも `UIColor` の dynamic provider で OS のライト/ダークに連動（アセットカタログなし）。`secondary`（前景 65%。コントラスト比は ダーク約 8.4:1・ライト約 5.7:1）、`line`（前景 25%）、余白スケール（`spaceXS`〜`spaceXL`）、`cornerRadius`、線の太さ、`maxContentWidth`（520）、`heroMinHeight`、`heroAccessibilityHeight`、`tabFadeWidth`、`disabledOutlineOpacity`（0.5。ダーク約 5.3:1・ライト約 3.5:1）、`outlineLineWidth`、`mainButtonDiameter`（72）、`selectedDotSize`、`minTouchTarget`、`headingTracking`（1.5）、`symbolWeight`。`extension Theme` の `enum Sphere`（球体の大きさ・グラデーション階調・縁・ハイライト・影・呼吸の定数）と `enum Ripple`（波紋の本数・縦横比・不透明度・線幅・周期・level による変化の定数）
   - `extension View { func themeHeading() }`: 小見出しの共通スタイル
 - 依存: SwiftUI、UIKit
-- 参照元: ContentView.swift、OnboardingView.swift、ProfileInfoSheet.swift、RippleView.swift
+- 参照元: ContentView.swift、OnboardingView.swift、ProfileInfoSheet.swift、HeroSphereView.swift
 
-### HearingLens.swiftpm/RippleView.swift
-- 役割: F-02 の土台。画面中央に細い同心円の波紋を描く（アセットなし）
-- 主要要素: `struct RippleView`（`level: Double`（0...1 に丸める。リングの振幅をわずかに変える。フェーズ3で実際の音量を渡す。今は 0）、`isActive: Bool`）。`Canvas` で描画。`isActive` かつ Reduce Motion が OFF のときだけ `TimelineView(.animation)` で約4秒周期の「呼吸」。Reduce Motion のときは静止。装飾なので `.accessibilityHidden(true)`
-- 依存: Theme.swift
+### HearingLens.swiftpm/HeroSphereView.swift
+- 役割: F-02 の土台。画面中央に、光沢のある球体と、その下の水面に広がる楕円の波紋を描く（画像アセットなし）
+- 主要要素: `struct HeroSphereView`（`level: Double`（0...1 に丸める。呼吸の振幅と波紋の速さ・広がりを増やす。フェーズ3で実際の音量を渡す。今は 0）、`isActive: Bool`）。球体は `Circle` の `RadialGradient`＋`AngularGradient` の縁リング＋blur した白い楕円のハイライトを `drawingGroup` で1枚にまとめ、下に blur した扁平な楕円の影。波紋は `Canvas` で5本の楕円を1パスで描く。`isActive` かつ Reduce Motion が OFF のときだけ `TimelineView(.animation)` で、球体の呼吸と波紋の外への広がり。それ以外は静止表示。ダーク/ライトは `colorScheme` で階調を選ぶ。内部の `Layout` が利用可能な幅・高さから大きさを決める。装飾なので `.accessibilityHidden(true)`。ダーク/ライト・level 0 / 0.5 / 1・静止の `#Preview` つき
+- 依存: Theme.swift（`Theme.Sphere`、`Theme.Ripple`、`foreground`）
 - 参照元: ContentView.swift
 
 ### HearingLens.swiftpm/ProfileInfoSheet.swift
@@ -157,9 +157,9 @@
 - 参照元: ContentView.swift（`.sheet`）
 
 ### HearingLens.swiftpm/ContentView.swift
-- 役割: S-02 メイン画面（中央ビジュアル型・完全モノクロ・英語）。上から: 上部バー（モード文字切替 Everyday / Conversation と ⓘ）、`RippleView`、プロファイル名＋`shortDescription`、（会話モードのみ）アドバイス1つ（タップで次へ）＋「Practice the tips」、プロファイル文字タブ、状態の1行、音量スライダー＋丸い主ボタン
-- 主要要素: `ContentView`。`@State engine`、`@AppStorage("hasSeenOnboarding")`、`showOnboarding` / `showInfo` / `pendingIntroduction`（ⓘ シートが閉じてからオンボーディングを出し、シートが同時に2枚出ないようにする）、`tipIndex`（プロファイル変更で 0 に戻す）。選択状態は semibold＋前景100%＋下の点（`selectableText`）。状態の1行は優先順位: エラー → マイク拒否（「Open Settings」ボタン）→ Bluetooth → ヘッドホンなし案内 → 接続中 / Test Sound on。主ボタンは開始時 `Task { await engine.start() }`、`!canStart` または `isStopping` で不透明度を下げて無効化（円のまま）。ルートに `.tint(Theme.foreground)`、iPad では `Theme.maxContentWidth` で幅を制限。全体は `GeometryReader`＋縦 `ScrollView`（`minHeight` = 画面高、`.basedOnSize`）で、最大 Dynamic Type でも切れずにスクロールできる。アクセシビリティサイズでは波紋を固定高（`Theme.rippleAccessibilityHeight`）にし、主ボタンと状態行アイコンは `@ScaledMetric` で拡大（主ボタンは上限 1.4 倍）
-- 依存: HearingProfile.swift、HearingAudioEngine.swift、OnboardingView.swift、ProfileInfoSheet.swift、RippleView.swift、Theme.swift
+- 役割: S-02 メイン画面（中央ビジュアル型・完全モノクロ・英語）。上から: 上部バー（モード文字切替 Everyday / Conversation と ⓘ）、`HeroSphereView`、プロファイル名＋`shortDescription`、（会話モードのみ）アドバイス1つ（タップで次へ）＋「Practice the tips」、プロファイル文字タブ、状態の1行、音量スライダー＋丸い主ボタン
+- 主要要素: `ContentView`。`@State engine`、`@AppStorage("hasSeenOnboarding")`、`showOnboarding` / `showInfo` / `pendingIntroduction`（ⓘ シートが閉じてからオンボーディングを出し、シートが同時に2枚出ないようにする）、`tipIndex`（プロファイル変更で 0 に戻す）。選択状態は semibold＋前景100%＋下の点（`selectableText`）。状態の1行は優先順位: エラー → マイク拒否（「Open Settings」ボタン）→ Bluetooth → ヘッドホンなし案内 → 接続中 / Test Sound on。主ボタンは開始時 `Task { await engine.start() }`、`!canStart` または `isStopping` で無効化（塗りをやめ、前景の輪郭線＋補足色のアイコン）。プロファイル文字タブは右端を mask でフェード。ルートに `.tint(Theme.foreground)`、iPad では `Theme.maxContentWidth` で幅を制限。全体は `GeometryReader`＋縦 `ScrollView`（`minHeight` = 画面高、`.basedOnSize`）で、最大 Dynamic Type でも切れずにスクロールできる。アクセシビリティサイズでは中央ビジュアルを固定高（`Theme.heroAccessibilityHeight`）にし、主ボタンと状態行アイコンは `@ScaledMetric` で拡大（主ボタンは上限 1.4 倍）
+- 依存: HearingProfile.swift、HearingAudioEngine.swift、OnboardingView.swift、ProfileInfoSheet.swift、HeroSphereView.swift、Theme.swift
 - 参照元: MyApp.swift
 
 ### HearingLens.swiftpm/OnboardingView.swift

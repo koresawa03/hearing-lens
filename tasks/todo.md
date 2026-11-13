@@ -28,6 +28,17 @@
 - [ ] Accessibility Inspector のコントラスト監査（ユーザー）
 - [ ] 実機での見た目確認（ダーク/ライト、Dynamic Type 最大、Reduce Motion、iPad）
 
+## UI 仕上げ（球体＋水面の波紋、小修正）
+- [x] HeroSphereView.swift（光沢のある球体＋水面の楕円の波紋。呼吸・波紋の広がり・Reduce Motion で静止）、RippleView.swift を削除
+- [x] Theme.swift に `Sphere` / `Ripple` の定数を集約
+- [x] タブ右端のフェード（末尾の余白つき）
+- [x] 無効ボタンを輪郭線に変更（コントラスト比 ダーク約 5.3:1 / ライト約 3.5:1）
+- [x] 注意文を "Plug in headphones or use Test Sound (ⓘ)" に短縮し、折り返しを許可
+- [x] docs/design.md 3章、teach.md 第5章コラム、detail.md を更新
+- [x] xcodebuild BUILD SUCCEEDED、日本語 grep 0件
+- [ ] 実機での 60fps 確認（iPhone 12 等の古め端末）
+- [ ] Accessibility Inspector Audit（ユーザー）
+
 ## フェーズ2-A: 音響エンジンの土台と安全まわり（F-01, F-06）
 - [x] F-01 AVAudioEngine のノードグラフ構築（入力 → EQ → リバーブ → リミッター → 出力）
 - [x] F-01 EQ を4バンド固定（HPF / LPF / バンドパス / ピークEQ）、使わないバンドは bypass、つなぎ直さない

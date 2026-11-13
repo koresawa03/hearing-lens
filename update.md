@@ -1,5 +1,32 @@
 # update.md — 進捗ログ（追記型・新しいものが上）
 
+## 2026-11-13 19:00 — 中央ビジュアル「球体＋水面の波紋」と見た目の小修正
+
+### 立案
+- 依頼: 平面の同心円を、光沢のある球体＋水面の楕円の波紋に置き換える。同時に、タブ右端のフェード、無効ボタンの輪郭、注意文の短縮と折り返しを直す。PR #5 は先にマージ済み。注意文はユーザー承認の "Plug in headphones or use Test Sound (ⓘ)"。
+- 計画（要約）:
+  - docs 先行: design.md 3章の中央ビジュアルの記述と注意文を更新する
+  - 新規 `HeroSphereView.swift`（球体は Shape＋グラデーションを `drawingGroup`、波紋は Canvas）。`RippleView.swift` は削除し、ContentView の呼び出しを差し替える
+  - 値はすべて Theme.swift の `Sphere` / `Ripple` にまとめる
+  - ContentView: タブの右端フェード、無効ボタンは輪郭線＋補足色アイコン、注意文の折り返し
+  - 動きは `isActive` のときだけ。Reduce Motion では完全静止。VoiceOver には出さない
+- 影響範囲: HeroSphereView.swift（新規）、RippleView.swift（削除）、Theme.swift、ContentView.swift、docs/design.md 3章、teach.md 第5章、detail.md、tasks/todo.md、docs/ai-usage-log.md。
+- ブランチ: feat/ui-hero-sphere
+
+### 進捗
+- docs/design.md 3章を更新（球体＋波紋の構成・質感・動き・Reduce Motion・VoiceOver・値の集約・描画負荷、注意文、デザイン方針の「動き」）。
+- `HeroSphereView.swift` を新規作成、`RippleView.swift` を削除。`Theme.swift` に `Sphere` / `Ripple` を追加し、旧波紋用の定数を整理（`rippleMinHeight` 等は `heroMinHeight` 等に改名）。
+- ContentView: タブ右端のフェード、無効ボタンの輪郭（不透明度 0.5。ダーク約 5.3:1 / ライト約 3.5:1）、注意文の短縮と折り返し。
+- teach.md 第5章にコラム「SwiftUI で質感を作る」と想定質問、detail.md、tasks/todo.md、docs/ai-usage-log.md を更新。
+- xcodebuild（iPhone 17）BUILD SUCCEEDED、日本語 grep 0件。
+- 残課題: 実機での 60fps 確認、Accessibility Inspector Audit（ユーザー）。
+
+#### 実機での負荷確認手順
+シミュレーターは Mac の GPU で動くので、60fps と負荷は実機（iPhone 12 等の古めの端末が望ましい）で測る。稼働中に Test Sound を ON にして主ボタンで開始し、球体の呼吸と波紋が動いている状態で測る。
+1. Xcode の Debug ナビゲーター（実機を実行中に開く）: CPU 使用率とフレームレート（FPS）のゲージを見る。CPU が高止まりしないこと、FPS が 60 付近であることを確認する。
+2. Instruments の Animation Hitches テンプレート: Product > Profile から Animation Hitches を選び、10〜20秒記録する。Hitches（カクつき）が出ていないかを見る。出る場合は、blur の半径（`Theme.Sphere` の `*BlurRatio`）や波紋の本数（`Theme.Ripple.count`）を下げて再測定する。
+3. ダーク/ライト、iPad でも同様に確認する。
+
 ## 2026-11-13 18:40 — SSC 2027 規約に合わせたドキュメント更新
 
 ### 立案

@@ -57,7 +57,7 @@ struct ContentView: View {
     private var content: some View {
         VStack(spacing: Theme.spaceM) {
             topBar
-            ripple
+            hero
             profileSummary
             if engine.mode == .conversation {
                 conversationSection
@@ -70,14 +70,14 @@ struct ContentView: View {
 
     /// Flexible in the middle at normal sizes; smaller and fixed at accessibility text sizes
     @ViewBuilder
-    private var ripple: some View {
+    private var hero: some View {
         if dynamicTypeSize.isAccessibilitySize {
-            RippleView(level: 0, isActive: engine.isRunning)
+            HeroSphereView(level: 0, isActive: engine.isRunning)
                 .frame(maxWidth: .infinity)
-                .frame(height: Theme.rippleAccessibilityHeight)
+                .frame(height: Theme.heroAccessibilityHeight)
         } else {
-            RippleView(level: 0, isActive: engine.isRunning)
-                .frame(maxWidth: .infinity, minHeight: Theme.rippleMinHeight, maxHeight: .infinity)
+            HeroSphereView(level: 0, isActive: engine.isRunning)
+                .frame(maxWidth: .infinity, minHeight: Theme.heroMinHeight, maxHeight: .infinity)
         }
     }
 
@@ -200,9 +200,20 @@ struct ContentView: View {
                     }
                 }
             }
-            .padding(.horizontal, Theme.spaceXS)
+            // Trailing space lets the last tab scroll clear of the fade
+            .padding(.leading, Theme.spaceXS)
+            .padding(.trailing, Theme.tabFadeWidth)
         }
         .frame(minHeight: Theme.minTouchTarget + Theme.selectedDotSize)
+        // Fade the trailing edge so a cut-off tab reads as scrollable (leading edge stays opaque)
+        .mask(
+            HStack(spacing: 0) {
+                Rectangle()
+                LinearGradient(colors: [Theme.foreground, .clear],
+                               startPoint: .leading, endPoint: .trailing)
+                    .frame(width: Theme.tabFadeWidth)
+            }
+        )
     }
 
     // MARK: Status line (F-06): one short line, icon + text
@@ -214,6 +225,7 @@ struct ContentView: View {
                 .accessibilityHidden(true)
             Text(status.text)
                 .font(.footnote)
+                .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
             if engine.micPermissionDenied && engine.lastErrorMessage == nil {
                 Button("Open Settings") {
@@ -242,7 +254,7 @@ struct ContentView: View {
             return ("info.circle", "Wired headphones recommended — Bluetooth adds about 150 ms of delay.")
         }
         if !engine.isHeadphoneConnected && !engine.useTestSource {
-            return ("headphones.slash", "Connect headphones, or turn on Test Sound in ⓘ")
+            return ("headphones.slash", "Plug in headphones or use Test Sound (ⓘ)")
         }
         if engine.isHeadphoneConnected {
             return ("headphones", "Headphones connected")
@@ -279,10 +291,17 @@ struct ContentView: View {
         } label: {
             Image(systemName: engine.isRunning ? "stop.fill" : "play.fill")
                 .font(.title.weight(Theme.symbolWeight))
-                .foregroundStyle(Theme.background)
+                // Disabled: outline only (shape, not faint fill) with a secondary-color icon
+                .foregroundStyle(isDisabled ? Theme.secondary : Theme.background)
                 .frame(width: mainButtonDiameter, height: mainButtonDiameter)
-                .background(Theme.foreground, in: Circle())
-                .opacity(isDisabled ? Theme.disabledOpacity : 1)
+                .background {
+                    if isDisabled {
+                        Circle().strokeBorder(Theme.foreground.opacity(Theme.disabledOutlineOpacity),
+                                              lineWidth: Theme.outlineLineWidth)
+                    } else {
+                        Circle().fill(Theme.foreground)
+                    }
+                }
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
