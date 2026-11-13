@@ -58,6 +58,10 @@
 - 役割: .swiftpm 形式、外部依存・音声アセットなしの決定
 - 参照元: aim.md、docs/design.md、HearingLens.swiftpm/Package.swift
 
+### docs/ai-usage-log.md
+- 役割: SSC 2027 の AI 利用の全開示に備えた記録。日付・機能ID・AIが行ったこと・作者が行ったこと（作者の欄は作者が記入）
+- 参照元: CLAUDE.md（作業完了時に1行追記）、aim.md、tasks/todo.md フェーズ7
+
 ### docs/adr/0002-output-limiter-for-hearing-safety.md
 - 役割: 出力段にピークリミッター＋音量上限を置く決定（聴覚保護）
 - 参照元: aim.md、CLAUDE.md、docs/design.md、HearingLens.swiftpm/HearingAudioEngine.swift
