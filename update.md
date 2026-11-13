@@ -1,5 +1,23 @@
 # update.md — 進捗ログ（追記型・新しいものが上）
 
+## 2026-11-13 18:40 — SSC 2027 規約に合わせたドキュメント更新
+
+### 立案
+- 依頼: SSC 2027 の規約（作者が developer.apple.com の policy / eligibility で 2026-11-13 に確認）に合わせて、ドキュメントの根拠と運用ルールを更新する。主な変化は、容量上限が 25MB から ZIP 500MB に緩和、Xcode 27 / Swift Playground 4.7 以降が必須、AI 利用はすべて開示が必要、の3点。
+- 計画（要約）:
+  - CLAUDE.md・aim.md・docs/design.md 1・6章の SSC 制約を新規約に更新する
+  - ADR-0001 は状態「採用」のまま、末尾に「2027年規約による追記」を足す（経緯の 25MB 記述は残す）
+  - 新規 docs/ai-usage-log.md で AI 利用を記録する（作者の欄は【要記入】）。CLAUDE.md のワークフローに「作業完了時に1行追記」を追加
+  - teach.md の 25MB 根拠を書き換え、tasks/todo.md・detail.md・baton.md を更新
+- 影響範囲: CLAUDE.md, aim.md, docs/design.md 1・6章, docs/adr/0001, docs/ai-usage-log.md(新規), teach.md, tasks/todo.md, detail.md, baton.md。コード変更なし（HearingLens.swiftpm は触らない）。ブランチ docs/ssc-2027-rules。PR #4 は先にマージ済み。
+
+### 進捗
+- CLAUDE.md（SSC 制約・ワークフロー・Xcode 27 の注記）、aim.md、docs/design.md 1・6章、ADR-0001 追記節、docs/ai-usage-log.md（新規、5行、作者欄は【要記入】）、teach.md、tasks/todo.md、detail.md、baton.md を更新。
+- grep（25 ?MB）: 残りは ADR-0001 の経緯部分と、「25MB 前提は撤廃」と書いた新規記述のみ。HearingLens.swiftpm の差分なし。
+
+### 完了
+- 完了（2026-11-13）。コード変更なし。
+
 ## 2026-11-13 18:00 — UI リデザイン（完全モノクロ・中央ビジュアル）＋アプリ内英語化
 
 ### 立案
