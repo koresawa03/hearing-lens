@@ -108,33 +108,71 @@ F-02 と同じ処理に、話し方のアドバイスを加える。
 ### ノードグラフ
 ```
 [マイク入力 AVAudioInputNode] ─┐
-                               ├→ [AVAudioUnitEQ] → [AVAudioUnitReverb] → [ピークリミッター] → [mainMixer] → 出力
-[テスト音源 AVAudioPlayerNode] ┘
+[環境ノイズ AVAudioSourceNode] ┼→ [sourceMixer] → [AVAudioUnitEQ(4バンド固定)] → [AVAudioUnitReverb] → [ピークリミッター] → [mainMixer] → 出力
+[話し声 AVAudioPlayerNode(F-07, 後で追加)] ┘
 ```
-- 入力は「マイク」か「テスト音源」のどちらか一方を使う（F-07）
-- EQ: バンド構成で LPF / HPF / バンドパス / パラメトリックを表現（プロファイルごとに値を差し替える）
+- 入力は「マイク」か「テスト音源」のどちらか一方を使う（F-07）。テスト音源モードではマイクをつながない
+- 環境ノイズ（APD 用・テスト音源用）は `AVAudioSourceNode` で、コードが生成するピンクノイズ。音声アセットは不要で、無限に鳴らせる
+- F-07 の話し声は、後で `AVAudioPlayerNode` を sourceMixer に追加して流す（まだ未実装）
 - リバーブ: `loadFactoryPreset` で `.smallRoom` / `.mediumHall` を使う。不要なときは wetDryMix を 0
-- APD の環境ノイズ: 合成ノイズを別の `AVAudioPlayerNode` からミックス（実装時に詳細化）
 - リミッター: `AVAudioUnitEffect` で `kAudioUnitSubType_PeakLimiter` を使う。ミキサーの出力音量にも上限を設ける（ADR-0002）
 - 開始時は音量 0 からフェードインする
 
+### EQ のバンド構成（固定）
+EQ は固定数（4）のバンドを最初に作り、プロファイルが使わないバンドは bypass にする。プロファイルを切り替えても**ノードをつなぎ直さない**（つなぎ直すと音が途切れるため）。各バンドの役割はコードの定数（`EQBand`）で固定する。
+
+| バンド | 種類 | 使うプロファイル |
+|---|---|---|
+| band0 | ハイパス（HPF） | 低音難聴 |
+| band1 | ローパス（LPF） | 高音難聴 |
+| band2 | バンドパス | APD |
+| band3 | パラメトリック（ピークEQ） | 聴覚過敏 |
+
+- フィルタ値の適用（`applyFilter`）は PR #2 で実装済み（フェーズ2-B の先取り）。プロファイル切替は稼働中でも各バンドのパラメーターを書き換えるだけで行う
+- フェーズ2-B で行うこと: 値のランプ（なめらかな変化）、F-05 緩和の作り込み、聴感チューニング
+
+### 低遅延化
+- 自分の声が遅れて返ってくると話しにくくなる（遅延聴覚フィードバック、DAF）。会話モードの体験の核なので、遅延を減らす
+- `setPreferredIOBufferDuration` で IO バッファを小さくする（約5ms、定数）。`setPreferredSampleRate` は 48kHz（定数）
+- OS が希望どおりにしないことがあるため、`setActive(true)` の後に実際に適用された `ioBufferDuration` と `sampleRate` をデバッグ用にログ出力する（`os.Logger`、category は "audio"）
+- 詳細と他の案は ADR-0003
+
 ### AVAudioSession
-- カテゴリ: `.playAndRecord`
-- モード: `.default`（`.measurement` は処理が無効化されることがあるため避ける）
-- オプション（出発点）: `.allowBluetoothA2DP`（Bluetooth はA2DP出力）、`.defaultToSpeaker` は付けない（スピーカー出力はハウリングのため）
-- 入力は内蔵マイクを使う。Bluetooth ヘッドホンの場合、出力は A2DP、入力は内蔵マイク
-- テスト音源モード（F-07）はマイクを使わないため `.playback`（オプションなし）にする。ヘッドホンなしでも内蔵スピーカーから鳴らせる（`.playAndRecord` のままだと小さい受話口から鳴るため）。ハウリングの心配はない。稼働中にモードを切り替えたら一度停止し、ユーザーの再開操作でカテゴリを合わせ直す
-- `AVAudioEngineConfigurationChange`（入出力フォーマットの変化などでエンジンが自分で止まる通知）を購読し、停止して状態を戻す。自動再開はしない
+入力ソースによってカテゴリを変える。
+
+| 体験 | カテゴリ | モード | オプション |
+|---|---|---|---|
+| マイク体験 | `.playAndRecord` | `.default`（`.measurement` は処理が無効化されることがあるため避ける） | `[.allowBluetoothA2DP]` |
+| テスト音源 | `.playback` | `.default` | なし |
+
+- マイク体験は `.defaultToSpeaker` を付けない（スピーカー出力はマイクが拾ってハウリングするため）。`.allowBluetooth`（HFP）も付けない（下記）
+- `.playAndRecord` で `.defaultToSpeaker` なしだと、ヘッドホンがないとき通話用の受話口から出てほとんど聞こえない。テスト音源はマイクを使わないので `.playback` にして内蔵スピーカーから鳴らす（ヘッドホンなしの審査員向け）。ハウリングの心配はない
+- 稼働中に `useTestSource` を切り替えたら停止する（カテゴリが食い違わないように）。自動再開はしない。再開はユーザーの操作
+- 両方で `setPreferredSampleRate` と `setPreferredIOBufferDuration` を設定する
+- `AVAudioEngineConfigurationChange`（入出力フォーマットの変化などでエンジンが自分で止まる通知）を購読し、フェードなしで即停止して状態を戻す。自動再開はしない
+
+### 入力は内蔵マイクに固定
+- マイク体験では `availableInputs` から `.builtInMic` を探して `setPreferredInput` で指定する
+- ヘッドホン判定の `headphonePortTypes` から `.bluetoothHFP` を外す。HFP は通話音質（帯域が狭い）で、高音難聴・聴覚過敏の体験が成立しないため
+- Bluetooth ヘッドホンは出力のみ（A2DP）。入力は常に内蔵マイク
+- 内蔵マイクが見つからない場合はエラーを表示して開始しない（ADR-0003）
+
+### 停止の仕方
+- ユーザー操作の停止: 出力音量を短くフェードアウト（約0.15秒）してから停止する
+- ヘッドホン抜去・割り込み・構成変更: フェードなしで**即停止**する（ハウリング防止・安全のほうがクリック音より優先）
+- フェードアウト中は開始・再停止の操作を受け付けない（UI のボタンも無効にする）
 
 ### ルート変更の処理（F-06）
-- `AVAudioSession.routeChangeNotification` を購読する
-- 現在のルートの出力に、ヘッドホン系ポート（`.headphones` / `.bluetoothA2DP` / `.bluetoothLE` / `.usbAudio` など）があるかで `isHeadphoneConnected` を更新する
-- 接続していない場合はエンジンを停止し、再生しない。UI は「ヘッドホンを接続してください」を表示する
-- 抜けた場合（`oldDeviceUnavailable`）は即停止する
+- `AVAudioSession.routeChangeNotification` を購読し、理由（reason）を取り出して処理する
+- 現在のルートの出力に、ヘッドホン系ポート（`.headphones` / `.bluetoothA2DP` / `.bluetoothLE` / `.usbAudio`）があるかで `isHeadphoneConnected` を更新する
+- reason が `.oldDeviceUnavailable` でヘッドホンがなくなった → 即停止
+- reason が `.newDeviceAvailable`（ヘッドホン接続）→ 状態の更新のみ。自動で開始しない
+- 保険: マイクモード稼働中にヘッドホンが無くなったら、理由に関係なく即停止する
+- テスト音源モードはマイクを使わないので、ヘッドホンが外れても止めない
 
 ### 割り込み
 - `AVAudioSession.interruptionNotification` を購読する
-- 割り込み開始（電話など）: 停止して UI に反映
+- 割り込み開始（電話など）: フェードなしで即停止して UI に反映
 - 割り込み終了: 自動再開せず、ユーザーの操作で再開する（急な再生を避ける）
 
 ## 5. 例外
@@ -143,16 +181,19 @@ F-02 と同じ処理に、話し方のアドバイスを加える。
 |---|---|
 | マイク権限の拒否 | パススルーを開始しない。説明と「設定を開く」導線、テスト音源モードの案内を表示 |
 | ヘッドホン未接続 | マイクパススルーしない（F-06）。接続を促す。テスト音源は利用可（ただしマイクは使わない） |
-| 割り込み（電話・Siri など） | 停止し、終了後もユーザー操作で再開 |
-| ルート変更（抜き差し） | 抜けたら即停止。差したときは自動で再生せず、ユーザー操作を待つ |
-| Bluetooth 接続 | 遅延の注意（約150ms）と有線推奨を表示 |
-| エンジン構成変更（AVAudioEngineConfigurationChange） | 停止して状態を戻す。自動再開しない |
+| 内蔵マイクが見つからない | 「内蔵マイクが見つかりませんでした」を表示し、開始せず停止状態に戻す |
+| 割り込み（電話・Siri など） | 即停止し、終了後もユーザー操作で再開 |
+| ルート変更（抜去: `oldDeviceUnavailable`） | ヘッドホンがなくなったら即停止 |
+| ルート変更（接続: `newDeviceAvailable`） | 状態の更新のみ。自動で再生しない（ユーザー操作を待つ） |
+| 稼働中にテスト音源の ON/OFF を切り替え | 即停止（再開はユーザー操作） |
+| Bluetooth 接続 | 遅延の注意（約150ms）と有線推奨を表示。入力は内蔵マイク、出力のみ A2DP |
+| エンジン構成変更（AVAudioEngineConfigurationChange） | 即停止して状態を戻す。自動再開しない |
 | エンジン起動失敗 | エラーを表示し停止状態に戻す（クラッシュしない） |
 
 ## 6. 要検討
 
 1. **聴覚過敏の +18dB と聴覚保護**: 出力段にピークリミッター（`kAudioUnitSubType_PeakLimiter`、`AVAudioUnitEffect` 経由）と出力音量上限が必須。審査員の耳を守る。ブースト量自体も実機で聞いて控えめにする（ADR-0002）
-2. **Bluetooth の遅延**: 約150ms の遅延があり、自分の声が遅れて返って話しにくい。有線を推奨する表示を出す。Bluetooth は A2DP 出力 + 内蔵マイク
+2. **Bluetooth の遅延**: 約150ms の遅延があり、自分の声が遅れて返って話しにくい。有線を推奨する表示を出す。Bluetooth は A2DP 出力 + 内蔵マイク（HFP は使わない。ADR-0003）
 3. **用語と表現**: APD・聴覚過敏は「聴力の低下（難聴）」ではない。文言でひとまとめにしない。APD のフィルタは近似であると明記する。医学的な再現ではない旨の注意書きを S-01 と S-02 に置く
 4. **F-07 の話し声**: `AVSpeechSynthesizer.write(to:)` でオフライン生成したバッファを使う案（アセット0）。生成速度・品質・iOS の音声が端末に入っているかを検証する。ノイズはコード合成
 5. **生成AI利用の申告**: SSC の提出要項に生成AI利用の申告欄がある可能性。要項を確認する。teach.md で、作者が自分で設計と実装を説明できる状態を作る
