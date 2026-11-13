@@ -1,5 +1,18 @@
 # update.md — 進捗ログ（追記型・新しいものが上）
 
+## 2026-11-13 16:20 — フェーズ2: 音響エンジン（F-01 / F-06）
+
+### 立案
+- 依頼内容: PR #1 をマージし、フェーズ2（音響エンジン F-01 / F-06）を開始する。ブランチ `feat/f01-audio-engine`。
+- 計画: `HearingAudioEngine` を実装する。ノードグラフは inputNode / noiseNode → sourceMixer → EQ(3バンド) → リバーブ → ピークリミッター → mainMixer。ノイズはコード合成（AVAudioSourceNode）。出力音量は上限 0.6 とし、0 から約0.5秒でフェードイン。AVAudioSession は `.playAndRecord` + A2DP（スピーカー出力なし）。マイク権限拒否・割り込み・ルート変更・エンジン起動失敗を例外処理する。`ContentView` は開始/停止、権限拒否の案内、エラー表示、Bluetooth 注意を追加。
+- 影響範囲: HearingAudioEngine.swift、ContentView.swift、detail.md、teach.md 第3・4章、tasks/todo.md、baton.md。
+
+### 進捗
+- `HearingAudioEngine` を実装: ノードグラフ（inputNode / noiseNode → sourceMixer → EQ → リバーブ → リミッター → mainMixer）、applyFilter によるプロファイル切替（再起動なし）、出力上限 0.6 と 0.5 秒フェードイン、マイク権限・割り込み・ルート変更・起動失敗の処理。ContentView に開始/停止・権限拒否案内・エラー・Bluetooth 注意を追加。
+- xcodebuild（iPhone 17 シミュレータ）BUILD SUCCEEDED、自作コードの警告なし。
+- 追加修正: テスト音源モードは `.playback`（内蔵スピーカー可・マイク不使用）、マイクモードは `.playAndRecord` + A2DP のまま。稼働中に `useTestSource` を切り替えたら停止。`AVAudioEngineConfigurationChange` を購読し、稼働中なら teardown（自動再開なし）。design.md 4・5章、teach.md 第4章、detail.md、baton.md を更新。xcodebuild BUILD SUCCEEDED、自作コードの警告なし。
+- 残課題: 実機＋有線ヘッドホンでの聴感確認とフィルタ値調整（低音量から）。F-04 のメーター、F-07 の声ループは後続フェーズ。
+
 ## 2026-11-13 15:50 — プロジェクト立ち上げ（理解・Git作成・基盤作成）【完了】
 
 ### 立案

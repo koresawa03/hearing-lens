@@ -105,23 +105,29 @@
 - 参照元: HearingAudioEngine.swift、ContentView.swift
 
 ### HearingLens.swiftpm/HearingAudioEngine.swift
-- 役割: F-01・F-04・F-06・F-07 の音響エンジンの土台。現状は状態管理とルート監視のみで、実音声処理は TODO(F-01)
+- 役割: F-01 フィルタ適用の音響エンジン、F-06 ヘッドホン検知・割り込み処理、聴覚保護（ADR-0002）。F-04（音量メーター）と F-07 の声ループは未実装
+- ノードグラフ: `inputNode`（マイク時のみ接続）/ `noiseNode` → `sourceMixer` → `eq`（3バンド）→ `reverb` → `limiter`（ピークリミッター）→ `mainMixerNode` → 出力。ノードは init で attach、`start()` で connect
 - 主要要素:
   - `enum VolumeFeedback`（`.tooQuiet` / `.tooLoud` / `.good`）
+  - `private final class PinkNoiseGenerator`（`@unchecked Sendable`）: Paul Kellet の簡易ピンクフィルタ + xorshift 乱数。render スレッド専用
+  - `private nonisolated func makeNoiseNode(format:)`: `AVAudioSourceNode` を MainActor 外で生成
   - `@Observable @MainActor final class HearingAudioEngine`
-    - 状態: `selectedProfile`、`mode`、`isRunning`（外部からは読み取り専用）、`isHeadphoneConnected`（同）、`useTestSource`、`isAdviceApplied`、`inputLevel`
-    - `quietThreshold`（0.15）/ `loudThreshold`（0.7）と `volumeFeedback`
-    - `currentFilter`: 選択中プロファイルのフィルタ。`isAdviceApplied` なら `relaxed`
-    - `canStart`: ヘッドホン接続またはテスト音源なら true
-    - `refreshRoute()`: 現在の出力ルートにヘッドホン類があるか確認して反映
-    - `init()` で `routeChangeNotification` を購読。ヘッドホンが外れたら（テスト音源を除き）`stop()`
-    - `start()` / `stop()` / `select(_:)`: 現状はフラグ更新のみ（実処理は TODO(F-01)）
-- 依存: HearingProfile.swift、AVFoundation、Observation
+    - 状態: `selectedProfile` / `isAdviceApplied` / `useTestSource`（didSet で `applyFilter`。`useTestSource` は稼働中に切り替わると `stop()`）、`mode`、`isRunning`・`isHeadphoneConnected`・`isBluetoothOutput`・`micPermissionDenied`（外部から読み取り専用）、`lastErrorMessage`、`inputLevel`（TODO(F-04)）
+    - 定数: `quietThreshold` / `loudThreshold`、`maxOutputVolume`（0.6）、フェードイン時間 0.5 秒・10 段、IO バッファ 5ms など
+    - `currentFilter` / `canStart` / `volumeFeedback`
+    - `applyFilter(_:)`（private）: band0=HPF、band1=LPF、band2=バンドパス（優先）またはパラメトリック。未使用バンドは bypass。リバーブのプリセットと wet、ノイズ音量（`noiseNode.volume`）を設定。稼働中でも呼べる
+    - `refreshRoute()`: 出力ルートからヘッドホン有無と Bluetooth 出力かを更新
+    - `handleRouteChange()`: ヘッドホンが外れたら（テスト音源を除き）`stop()`
+    - `handleInterruption(typeValue:)`: 割り込み開始で `stop()`、終了しても自動再開しない
+    - `handleConfigurationChange()`: `.AVAudioEngineConfigurationChange`（object: engine、`configurationObserver`）で稼働中なら `teardown()`、自動再開なし
+    - `start() async`: マイク権限要求 → AVAudioSession（マイク時 `.playAndRecord` / `.allowBluetoothA2DP`、テスト音源時 `.playback` でスピーカー可 / 5ms）→ グラフ接続 → エンジン起動 → フェードイン。失敗は `lastErrorMessage` に日本語で入れる
+    - `stop()` / `select(_:)`、private: `connectGraph`、`startFadeIn`、`teardown`、`deactivateSession`
+- 依存: HearingProfile.swift、AVFoundation、AudioToolbox、Observation
 - 参照元: ContentView.swift
 
 ### HearingLens.swiftpm/ContentView.swift
 - 役割: S-02 メイン画面。モード Picker、2x2 プロファイルグリッド、解説、会話モードのアドバイス、ビジュアライザーとメーターの場所取り、ヘッドホン状態・テスト音源・開始/停止（F-02〜F-07 の枠）
-- 主要要素: `ContentView`。`@State engine`（`HearingAudioEngine`）、`@AppStorage("hasSeenOnboarding")` と `@State showOnboarding`。`onAppear` で `showOnboarding = !hasSeenOnboarding` を設定し、`.sheet` で `OnboardingView` を表示（オンボーディングは ContentView から出す）
+- 主要要素: `ContentView`。`@State engine`（`HearingAudioEngine`）、`@AppStorage("hasSeenOnboarding")` と `@State showOnboarding`。`onAppear` で `showOnboarding = !hasSeenOnboarding` を設定し、`.sheet` で `OnboardingView` を表示（オンボーディングは ContentView から出す）。開始ボタンは `Task { await engine.start() }`。`engine.micPermissionDenied` のとき説明と「設定を開く」ボタン（`UIApplication.openSettingsURLString`）、`engine.lastErrorMessage` のエラー表示、`engine.isBluetoothOutput` のとき Bluetooth 遅延の注意を表示
 - 依存: HearingProfile.swift、HearingAudioEngine.swift、OnboardingView.swift
 - 参照元: MyApp.swift
 
