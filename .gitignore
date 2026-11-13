@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+
+# Xcode user data / build products
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# SwiftPM (Package.resolved is intentionally kept)
+.build/
+**/.swiftpm/xcode/
+
+# Swift Playgrounds user state
+**/.swiftpm/xcode/package.xcworkspace/xcuserdata/
+**/.swiftpm/playgrounds/
+
+# Secrets / signing
+.env
+*.p8
+*.p12
+*.mobileprovision
