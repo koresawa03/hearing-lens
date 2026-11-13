@@ -1,0 +1,22 @@
+# ADR-0001: Swift Playgrounds App（.swiftpm）で、外部依存と音声アセットなしにする
+
+- 日付: 2026-11-13
+- 状態: 採用
+
+## 背景
+Swift Student Challenge は、全体 25MB 以内、完全オフライン、Swift Playgrounds App 形式で提出する。
+アプリは「話し声」と「環境音」を使ってフィルタ効果を体験させる必要があるが、録音ファイルを入れるとサイズが増え、権利・収録の手間もある。
+
+## 決定
+- プロジェクト形式は `HearingLens.swiftpm`（Swift Playgrounds App）
+- 外部ライブラリを使わず、AVFoundation と SwiftUI だけで作る
+- 音声・画像アセットを入れない。環境音はコードで合成、話し声は `AVSpeechSynthesizer.write(to:)` でオフライン生成、アイコンは SF Symbols、描画は SwiftUI
+
+## 検討した他の案と捨てた理由
+- 案A: Xcode プロジェクト形式（.xcodeproj）。捨てた理由: SSC の提出形式が Swift Playgrounds App であり、iPad の Playgrounds でも開ける形が望ましい
+- 案B: 録音した音声アセット（話し声・環境音）を同梱。捨てた理由: 25MB の制限を圧迫する。収録の手間と権利の管理が増える。コード合成なら説明可能性（作者が自分の言葉で説明できる）も高まる
+
+## 結果・影響
+- サイズが小さく、権利の問題がない
+- 合成音や TTS の音質は録音より劣る。実機で聞いて品質を確認し、足りなければ合成の工夫で補う
+- `AVSpeechSynthesizer.write(to:)` が使えない・品質が低い場合は、ADR を更新して代替案（例: 合成した簡易的な声の代わりに、聞き取りの代わりになるトーン）を検討する
