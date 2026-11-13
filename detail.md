@@ -87,7 +87,7 @@
 
 ### HearingLens.swiftpm/Package.swift
 - 役割: Swift Playgrounds App のパッケージ定義
-- 主要要素: `.iOSApplication`（iOS 17、iPhone / iPad、アプリアイコンは仮の `.placeholder(icon: .mic)`、アクセント indigo、カテゴリ education）、マイク権限の capability（用途文字列つき）、実行ターゲット `AppModule`（path ".")
+- 主要要素: `.iOSApplication`（iOS 17、iPhone / iPad、アプリアイコンは仮の `.placeholder(icon: .mic)`、アクセントは `.presetColor(.indigo)` を残す（placeholder アイコンに必須で、外すとビルドが失敗する。UI は `.tint(Theme.foreground)` で上書きするため画面には出ない）、カテゴリ education）、マイク権限の capability（英語の用途文字列つき）、実行ターゲット `AppModule`（path ".")
 - 依存: PackageDescription、AppleProductTypes
 - 参照元: Xcode / Swift Playgrounds
 
@@ -104,9 +104,9 @@
   - `struct FilterParameters`: `lowPassCutoff` / `highPassCutoff` / `bandPass` / `peakEQ`（nil は「処理しない」）、`reverbPreset`、`reverbWetDryMix`（0...100）、`noiseMix`（0...1）。タプルを含むため `==` は手書き
     - `static let clear`: 処理なし（原音）
     - `var relaxed`: F-05 用の緩和版。LPF カットオフ ×2（上限 20kHz）、HPF カットオフ ×½、バンドパス帯域幅 ×2、EQ ゲイン / リバーブ wet / ノイズ混合 ×½。完全クリアではない
-  - `enum HearingProfile`（高音難聴 / 低音難聴 / APD / 聴覚過敏）: `title`、`symbolName`、`tint`、`mainTargets`、`description`、`conversationTips`（各3つ）、`filter`（未調整の出発値）
+  - `enum HearingProfile`（High-Frequency Hearing Loss / Low-Frequency Hearing Loss / APD / Hyperacusis）: `title`（正式名。VoiceOver にも使う）、`tabTitle`（タブ用の短い名前）、`shortDescription`（メイン画面の一行説明）、`symbolName`、`mainTargets`、`description`、`conversationTips`（各3つ）、`filter`（未調整の出発値）。`tint` は削除済み（完全モノクロ化、ADR-0004）。文字列はすべて英語
 - 依存: SwiftUI、AVFoundation
-- 参照元: HearingAudioEngine.swift、ContentView.swift
+- 参照元: HearingAudioEngine.swift、ContentView.swift、ProfileInfoSheet.swift
 
 ### HearingLens.swiftpm/HearingAudioEngine.swift
 - 役割: F-01 フィルタ適用の音響エンジン、F-06 ヘッドホン検知・割り込み処理、聴覚保護（ADR-0002）、低遅延・入力ルーティング（ADR-0003）。F-04（音量メーター）と F-07 の話し声は未実装
@@ -118,7 +118,7 @@
   - `private final class PinkNoiseGenerator`（`@unchecked Sendable`）: Paul Kellet の簡易ピンクフィルタ + xorshift 乱数。render スレッド専用
   - `private nonisolated func makeNoiseNode(format:)`: `AVAudioSourceNode` を MainActor 外で生成
   - `@Observable @MainActor final class HearingAudioEngine`
-    - 状態: `selectedProfile` / `isAdviceApplied` / `useTestSource`（didSet で `applyFilter`。`useTestSource` は稼働中に切り替わると `stopImmediately()`）、`mode`、`isRunning`・`isStopping`（フェードアウト中）・`isHeadphoneConnected`・`isBluetoothOutput`・`micPermissionDenied`（外部から読み取り専用）、`lastErrorMessage`、`inputLevel`（TODO(F-04)）
+    - 状態: `outputVolume`（ユーザー音量。初期値 0.3 = 上限の半分。didSet で 0...`maxOutputVolume` に収め、稼働中でフェード中でなければ `mainMixerNode.outputVolume` に即反映。フェードインの到達値でもある）、`selectedProfile` / `isAdviceApplied` / `useTestSource`（didSet で `applyFilter`。`useTestSource` は稼働中に切り替わると `stopImmediately()`）、`mode`、`isRunning`・`isStopping`（フェードアウト中）・`isHeadphoneConnected`・`isBluetoothOutput`・`micPermissionDenied`（外部から読み取り専用）、`lastErrorMessage`、`inputLevel`（TODO(F-04)）
     - 定数: `quietThreshold` / `loudThreshold`、`maxOutputVolume`（0.6）、フェードイン 0.5 秒・10 段、フェードアウト 0.15 秒・6 段、`preferredIOBufferDuration`（5ms）、`preferredSampleRate`（48kHz）など
     - `currentFilter` / `canStart` / `volumeFeedback`
     - `applyFilter(_:)`（private）: 各 EQ バンドの値を書き換え、未使用バンドは bypass。リバーブのプリセットと wet、ノイズ音量（`noiseNode.volume`）を設定。ノードのつなぎ直しなし。稼働中でも呼べる
@@ -126,20 +126,40 @@
     - `handleRouteChange(reasonValue:)`: reason が `.oldDeviceUnavailable` でヘッドホンがなければ即停止。保険としてマイクモードでヘッドホンがなければ理由に関係なく即停止。`.newDeviceAvailable` は状態更新のみ
     - `handleInterruption(typeValue:)`: 割り込み開始で `stopImmediately()`、終了しても自動再開しない
     - `handleConfigurationChange()`: `.AVAudioEngineConfigurationChange` で稼働中なら `stopImmediately()`、自動再開なし
-    - `start() async`: マイク権限要求 → AVAudioSession（マイク時 `.playAndRecord` / `.allowBluetoothA2DP`、テスト音源時 `.playback`。サンプルレートとバッファを希望指定）→ 実際の値をログ → マイク時は内蔵マイクを `setPreferredInput`（無ければエラー）→ グラフ接続 → エンジン起動 → フェードイン。失敗は `lastErrorMessage` に日本語で入れる
+    - `start() async`: マイク権限要求 → AVAudioSession（マイク時 `.playAndRecord` / `.allowBluetoothA2DP`、テスト音源時 `.playback`。サンプルレートとバッファを希望指定）→ 実際の値をログ → マイク時は内蔵マイクを `setPreferredInput`（無ければエラー）→ グラフ接続 → エンジン起動 → フェードイン。失敗は `lastErrorMessage` に英語で入れる
     - `stop()`: ユーザー操作の停止。約0.15秒フェードアウト後に `teardown`。`isStopping` で二重実行を防ぐ
     - `select(_:)`、private: `stopImmediately`（フェードなしの即停止）、`connectGraph`、`startFadeIn`、`teardown`、`logAudioSession`、`deactivateSession`
 - 依存: HearingProfile.swift、AVFoundation、AudioToolbox、Observation、os
+- 参照元: ContentView.swift、ProfileInfoSheet.swift
+
+### HearingLens.swiftpm/Theme.swift
+- 役割: 完全モノクロ UI（ADR-0004）の色・余白・サイズ・字間・アイコンのウェイトを一か所に集約する。他のファイルは色や余白の数値を直書きせず `Theme` を参照する
+- 主要要素:
+  - `enum Theme`: `background`（ダーク #0E0E10 / ライト #F5F5F3）、`foreground`（ダーク 白 / ライト #111111）。どちらも `UIColor` の dynamic provider で OS のライト/ダークに連動（アセットカタログなし）。`secondary`（前景 65%。コントラスト比は ダーク約 8.4:1・ライト約 5.7:1）、`line`（前景 25%）、`disabledOpacity`、余白スケール（`spaceXS`〜`spaceXL`）、`cornerRadius`、線の太さ、`maxContentWidth`（520）、`rippleMinHeight`、`mainButtonDiameter`（72）、`selectedDotSize`、`minTouchTarget`、`headingTracking`（1.5）、`symbolWeight`、`ripplePeriod`（4秒）
+  - `extension View { func themeHeading() }`: 小見出しの共通スタイル
+- 依存: SwiftUI、UIKit
+- 参照元: ContentView.swift、OnboardingView.swift、ProfileInfoSheet.swift、RippleView.swift
+
+### HearingLens.swiftpm/RippleView.swift
+- 役割: F-02 の土台。画面中央に細い同心円の波紋を描く（アセットなし）
+- 主要要素: `struct RippleView`（`level: Double`（0...1 に丸める。リングの振幅をわずかに変える。フェーズ3で実際の音量を渡す。今は 0）、`isActive: Bool`）。`Canvas` で描画。`isActive` かつ Reduce Motion が OFF のときだけ `TimelineView(.animation)` で約4秒周期の「呼吸」。Reduce Motion のときは静止。装飾なので `.accessibilityHidden(true)`
+- 依存: Theme.swift
 - 参照元: ContentView.swift
 
+### HearingLens.swiftpm/ProfileInfoSheet.swift
+- 役割: S-02 の ⓘ ボタンで開くシート。選択中プロファイルの詳細、Test Sound、オンボーディング再表示
+- 主要要素: `struct ProfileInfoSheet`（`@Bindable engine`、`onShowIntroduction` クロージャ）。見出し「Common among」「How it sounds」「Tips for talking」、近似の注意、`Toggle("Test Sound")`（`engine.useTestSource`）と説明、「Show Introduction Again」「Done」。スクロール可、Dynamic Type 対応
+- 依存: HearingAudioEngine.swift、HearingProfile.swift、Theme.swift
+- 参照元: ContentView.swift（`.sheet`）
+
 ### HearingLens.swiftpm/ContentView.swift
-- 役割: S-02 メイン画面。モード Picker、2x2 プロファイルグリッド、解説、会話モードのアドバイス、ビジュアライザーとメーターの場所取り、ヘッドホン状態・テスト音源・開始/停止（F-02〜F-07 の枠）
-- 主要要素: `ContentView`。`@State engine`（`HearingAudioEngine`）、`@AppStorage("hasSeenOnboarding")` と `@State showOnboarding`。`onAppear` で `showOnboarding = !hasSeenOnboarding` を設定し、`.sheet` で `OnboardingView` を表示（オンボーディングは ContentView から出す）。開始ボタンは `Task { await engine.start() }`、`engine.isStopping` の間は無効。`engine.micPermissionDenied` のとき説明と「設定を開く」ボタン（`UIApplication.openSettingsURLString`）、`engine.lastErrorMessage` のエラー表示、`engine.isBluetoothOutput` のとき「有線ヘッドホン推奨（Bluetooth は約150msの遅延）」の注意を表示
-- 依存: HearingProfile.swift、HearingAudioEngine.swift、OnboardingView.swift
+- 役割: S-02 メイン画面（中央ビジュアル型・完全モノクロ・英語）。上から: 上部バー（モード文字切替 Everyday / Conversation と ⓘ）、`RippleView`、プロファイル名＋`shortDescription`、（会話モードのみ）アドバイス1つ（タップで次へ）＋「Practice the tips」、プロファイル文字タブ、状態の1行、音量スライダー＋丸い主ボタン
+- 主要要素: `ContentView`。`@State engine`、`@AppStorage("hasSeenOnboarding")`、`showOnboarding` / `showInfo` / `pendingIntroduction`（ⓘ シートが閉じてからオンボーディングを出し、シートが同時に2枚出ないようにする）、`tipIndex`（プロファイル変更で 0 に戻す）。選択状態は semibold＋前景100%＋下の点（`selectableText`）。状態の1行は優先順位: エラー → マイク拒否（「Open Settings」ボタン）→ Bluetooth → ヘッドホンなし案内 → 接続中 / Test Sound on。主ボタンは開始時 `Task { await engine.start() }`、`!canStart` または `isStopping` で不透明度を下げて無効化（円のまま）。ルートに `.tint(Theme.foreground)`、iPad では `Theme.maxContentWidth` で幅を制限。全体は `GeometryReader`＋縦 `ScrollView`（`minHeight` = 画面高、`.basedOnSize`）で、最大 Dynamic Type でも切れずにスクロールできる。アクセシビリティサイズでは波紋を固定高（`Theme.rippleAccessibilityHeight`）にし、主ボタンと状態行アイコンは `@ScaledMetric` で拡大（主ボタンは上限 1.4 倍）
+- 依存: HearingProfile.swift、HearingAudioEngine.swift、OnboardingView.swift、ProfileInfoSheet.swift、RippleView.swift、Theme.swift
 - 参照元: MyApp.swift
 
 ### HearingLens.swiftpm/OnboardingView.swift
-- 役割: S-01 オンボーディング（F-08）。使い方3ステップ、ご注意（医学的再現ではない）、安全のための注意。「はじめる」で `hasSeenOnboarding = true` にして閉じる
+- 役割: S-01 オンボーディング（F-08）。モノクロ・英語。3ステップ、Please note（医学的再現ではない）、For your safety。「Get Started」で `hasSeenOnboarding = true` にして閉じる
 - 主要要素: `OnboardingView`（`@AppStorage("hasSeenOnboarding")`、`@Environment(\.dismiss)`）
-- 依存: SwiftUI
+- 依存: SwiftUI、Theme.swift
 - 参照元: ContentView.swift（`.sheet`）

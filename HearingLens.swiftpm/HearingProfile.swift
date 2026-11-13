@@ -1,9 +1,9 @@
-// F-01 フィルタ定義 / F-03 会話モードのアドバイス / F-05 実践スイッチ用の緩和パラメータ
-// 4つの聞こえ方プロファイルと、音響エンジンに渡すフィルタ値を定義する。
+// F-01 filter definitions / F-03 conversation tips / relaxed parameters for the F-05 practice switch
+// Defines the four hearing profiles and the filter values handed to the audio engine.
 import SwiftUI
 import AVFoundation
 
-/// 体験モード（F-02 日常 / F-03 会話）
+/// Experience mode (F-02 everyday / F-03 conversation)
 enum ExperienceMode: String, CaseIterable, Identifiable {
     case daily
     case conversation
@@ -12,8 +12,8 @@ enum ExperienceMode: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .daily: return "日常モード"
-        case .conversation: return "会話モード"
+        case .daily: return "Everyday"
+        case .conversation: return "Conversation"
         }
     }
 
@@ -25,39 +25,39 @@ enum ExperienceMode: String, CaseIterable, Identifiable {
     }
 }
 
-/// 音響エンジンに渡すフィルタ設定。nil の項目は「その処理を行わない」を意味する。
+/// Filter settings handed to the audio engine. A nil item means "do not apply that processing".
 struct FilterParameters: Equatable {
-    /// ローパス（この周波数より上を減衰） Hz
+    /// Low-pass (attenuates above this frequency) in Hz
     var lowPassCutoff: Float?
-    /// ハイパス（この周波数より下を減衰） Hz
+    /// High-pass (attenuates below this frequency) in Hz
     var highPassCutoff: Float?
-    /// バンドパス（中心周波数 Hz, 帯域幅 オクターブ）
+    /// Band-pass (center frequency in Hz, bandwidth in octaves)
     var bandPass: (center: Float, bandwidth: Float)?
-    /// パラメトリックEQ（周波数 Hz, ゲイン dB, 帯域幅 オクターブ）
+    /// Parametric EQ (frequency in Hz, gain in dB, bandwidth in octaves)
     var peakEQ: (frequency: Float, gain: Float, bandwidth: Float)?
-    /// リバーブの種類（nil なら使わない）
+    /// Reverb type (nil means no reverb)
     var reverbPreset: AVAudioUnitReverbPreset?
-    /// リバーブのウェット量 0...100
+    /// Reverb wet amount 0...100
     var reverbWetDryMix: Float = 0
-    /// 環境ノイズの混ぜ具合 0...1
+    /// Amount of ambient noise mixed in, 0...1
     var noiseMix: Float = 0
 
-    /// 処理なし（原音）
+    /// No processing (original sound)
     static let clear = FilterParameters()
 
-    /// F-05「アドバイスを実践する」用の緩和版。
-    /// 簡易方針: 効果量（ゲイン・ウェット・ノイズ）を半分にし、
-    /// カットオフ系は「効きが弱まる方向」へ動かす。完全にクリアにはしない。
-    /// 実際に完全クリアへ切り替える場合は `.clear` を使う。
+    /// Relaxed version for the F-05 "Practice the tips" switch.
+    /// Simple approach: halve the effect amounts (gain, wet, noise) and move
+    /// cutoff-style values in the direction that weakens them. It never becomes fully clear.
+    /// Use `.clear` if it should ever switch to fully clear.
     var relaxed: FilterParameters {
         var r = self
-        // ローパスは上げる（高音が通る）: 約2倍
+        // Raise the low-pass (more highs pass): about double
         r.lowPassCutoff = lowPassCutoff.map { min($0 * 2, 20_000) }
-        // ハイパスは下げる（低音が通る）: 半分
+        // Lower the high-pass (more lows pass): half
         r.highPassCutoff = highPassCutoff.map { $0 / 2 }
-        // バンドパスは帯域を広げる
+        // Widen the band-pass
         r.bandPass = bandPass.map { ($0.center, $0.bandwidth * 2) }
-        // ブーストは半分
+        // Halve the boost
         r.peakEQ = peakEQ.map { ($0.frequency, $0.gain / 2, $0.bandwidth) }
         r.reverbWetDryMix = reverbWetDryMix / 2
         r.noiseMix = noiseMix / 2
@@ -78,7 +78,7 @@ struct FilterParameters: Equatable {
     }
 }
 
-/// 4つの聞こえ方プロファイル
+/// The four hearing profiles
 enum HearingProfile: String, CaseIterable, Identifiable {
     case highFrequencyLoss
     case lowFrequencyLoss
@@ -87,16 +87,37 @@ enum HearingProfile: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Full name (also used as the VoiceOver label)
     var title: String {
         switch self {
-        case .highFrequencyLoss: return "高音難聴"
-        case .lowFrequencyLoss: return "低音難聴"
-        case .apd: return "APD（聴覚情報処理障害）"
-        case .hyperacusis: return "聴覚過敏"
+        case .highFrequencyLoss: return "High-Frequency Hearing Loss"
+        case .lowFrequencyLoss: return "Low-Frequency Hearing Loss"
+        case .apd: return "APD (Auditory Processing Disorder)"
+        case .hyperacusis: return "Hyperacusis"
         }
     }
 
-    /// SF Symbols（iOS 17 で利用可能なもの）
+    /// Short name for the profile tabs
+    var tabTitle: String {
+        switch self {
+        case .highFrequencyLoss: return "High-Freq"
+        case .lowFrequencyLoss: return "Low-Freq"
+        case .apd: return "APD"
+        case .hyperacusis: return "Hyperacusis"
+        }
+    }
+
+    /// One-line summary shown under the profile name on the main screen
+    var shortDescription: String {
+        switch self {
+        case .highFrequencyLoss: return "High sounds and consonants fade, so words blur."
+        case .lowFrequencyLoss: return "Low sounds fade and your ears feel plugged."
+        case .apd: return "Hard to pick out a voice from background sound."
+        case .hyperacusis: return "Everyday sounds feel too loud and sharp."
+        }
+    }
+
+    /// SF Symbols (available on iOS 17)
     var symbolName: String {
         switch self {
         case .highFrequencyLoss: return "speaker.wave.1"
@@ -106,87 +127,77 @@ enum HearingProfile: String, CaseIterable, Identifiable {
         }
     }
 
-    /// 色だけに頼らない補助的なアクセントカラー
-    var tint: Color {
-        switch self {
-        case .highFrequencyLoss: return .orange
-        case .lowFrequencyLoss: return .teal
-        case .apd: return .purple
-        case .hyperacusis: return .pink
-        }
-    }
-
-    /// 主な対象
+    /// Who it is common among
     var mainTargets: String {
         switch self {
-        case .highFrequencyLoss: return "高齢者・騒音環境で働く人など"
-        case .lowFrequencyLoss: return "若者〜働き盛りの世代"
-        case .apd: return "若者・学生〜大人"
-        case .hyperacusis: return "子ども〜大人"
+        case .highFrequencyLoss: return "Older adults and people who work in noisy places"
+        case .lowFrequencyLoss: return "Teens to working-age adults"
+        case .apd: return "Students to adults"
+        case .hyperacusis: return "Children to adults"
         }
     }
 
-    /// どう聞こえるか
+    /// How it sounds
     var description: String {
         switch self {
         case .highFrequencyLoss:
-            return "高い音が聞こえにくくなり、サ行・タ行などの子音が欠けて、言葉の輪郭がぼやけて聞こえます。"
+            return "High-pitched sounds become hard to hear. Consonants like s, f, th and t drop out, so words lose their crisp edges and blur together."
         case .lowFrequencyLoss:
-            return "低い音が聞こえにくくなり、耳が詰まったような閉塞感と、音がこもって響く感じがあります。"
+            return "Low-pitched sounds become hard to hear. Your ears may feel plugged or full, and sounds can seem muffled and boomy."
         case .apd:
-            return "聴力は正常でも、背景の音と話し声を脳で分けて処理するのが難しい状態です。ここでは声がぼやけ、残響や雑音に埋もれる感覚で近似しています（実際の聞こえ方そのものではありません）。"
+            return "Hearing itself is typical, but the brain has trouble separating a voice from background sound. Here it is approximated with a blurred voice, echo and noise — not exactly how it sounds."
         case .hyperacusis:
-            return "聴力が低下しているのではなく、日常の音が大きすぎる・痛いと感じやすい状態です。特に高めの音が刺さるように響きます。"
+            return "This is not hearing loss. Everyday sounds feel too loud or even painful, and higher sounds can feel especially sharp."
         }
     }
 
-    /// 会話モードで表示する配慮のアドバイス（各3つ）
+    /// Tips for talking, shown in conversation mode (three per profile)
     var conversationTips: [String] {
         switch self {
         case .highFrequencyLoss:
             return [
-                "高い声で叫ばず、少し低めの落ち着いた声で話す",
-                "早口を避け、文節ごとにゆっくり話す",
-                "正面を向いて口元を見せる"
+                "Speak in a calm, slightly lower voice — don't shout.",
+                "Slow down and pause between phrases.",
+                "Face them so they can see your mouth."
             ]
         case .lowFrequencyLoss:
             return [
-                "1メートル以内に近づいて話す",
-                "ボソボソ話さず、中音域でハキハキ話す",
-                "換気扇など低い騒音がない静かな場所へ移動する"
+                "Move within about 1 meter (3 feet).",
+                "Speak clearly in a mid-range voice — don't mumble.",
+                "Move away from low hums like fans or engines."
             ]
         case .apd:
             return [
-                "カフェや人混みを避け、静かな場所で話す",
-                "名前を呼ぶ・合図をして注意を向けてから話す",
-                "短い文で区切る。メモや文字を併用する"
+                "Choose a quiet place, away from cafés and crowds.",
+                "Say their name or give a signal before you start.",
+                "Use short sentences, and add notes or text."
             ]
         case .hyperacusis:
             return [
-                "耳元で大声を出さず、穏やかなトーンで話す",
-                "相手がイヤーマフやイヤホンを着けていても尊重してそのまま話す",
-                "突発的な音や、複数人の同時会話を避ける"
+                "Use a gentle tone — never speak loudly near their ear.",
+                "If they wear earmuffs or earplugs, respect it and keep talking.",
+                "Avoid sudden noises and several people talking at once."
             ]
         }
     }
 
-    /// 音響エンジンに渡す開始値（実機で聴きながら調整する前提の初期値）
+    /// Starting values handed to the audio engine (initial values, to be tuned by ear on a real device)
     var filter: FilterParameters {
         switch self {
         case .highFrequencyLoss:
-            // 約1.3〜1.5kHz 以上を減衰（仕様）。中間の 1400Hz をカットオフに採用
+            // Attenuate above about 1.3-1.5 kHz (spec). Use the midpoint, 1400 Hz, as the cutoff
             return FilterParameters(lowPassCutoff: 1_400)
         case .lowFrequencyLoss:
-            // 約600〜650Hz 以下を減衰（仕様）。620Hz をカットオフに採用。
-            // 小部屋リバーブ 20% で閉塞感・響きを足す
+            // Attenuate below about 600-650 Hz (spec). Use 620 Hz as the cutoff.
+            // Add a 20% small-room reverb for a plugged-up, resonant feel
             return FilterParameters(
                 highPassCutoff: 620,
                 reverbPreset: .smallRoom,
                 reverbWetDryMix: 20
             )
         case .apd:
-            // 声の中心帯域(1kHz 付近)を残し、1.5 オクターブ幅で周辺をぼかす
-            // ホール残響 40% と環境ノイズ 30% で「声と背景の分離困難」を近似
+            // Keep the core voice band (around 1 kHz) and blur the surroundings with a 1.5-octave width.
+            // 40% hall reverb and 30% ambient noise approximate trouble separating a voice from background
             return FilterParameters(
                 bandPass: (center: 1_000, bandwidth: 1.5),
                 reverbPreset: .mediumHall,
@@ -194,8 +205,8 @@ enum HearingProfile: String, CaseIterable, Identifiable {
                 noiseMix: 0.3
             )
         case .hyperacusis:
-            // 不快に感じやすい 3〜4kHz の中心 3500Hz を +16dB ブースト（仕様 +15〜18dB）
-            // 帯域幅 1 オクターブで刺さる感じを強調
+            // Boost the center of the uncomfortable 3-4 kHz range (3500 Hz) by +16 dB (spec: +15-18 dB).
+            // A 1-octave bandwidth emphasizes the piercing quality
             return FilterParameters(
                 peakEQ: (frequency: 3_500, gain: 16, bandwidth: 1)
             )

@@ -1,192 +1,292 @@
-// S-02 メイン画面 / F-02 日常モード / F-03 会話モード / F-04 音量メーター(枠) / F-05 実践スイッチ / F-06 ヘッドホン状態 / F-07 テスト音源 / F-08 オンボーディング表示
+// S-02 main screen / F-02 everyday mode / F-03 conversation mode / F-04 level meter (frame) / F-05 practice switch / F-06 headphone status / F-07 test sound / F-08 onboarding
 import SwiftUI
 
 struct ContentView: View {
     @State private var engine = HearingAudioEngine()
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
     @State private var showOnboarding = false
+    @State private var showInfo = false
+    /// Set when the user asks for the introduction from the info sheet; handled after that sheet is dismissed
+    @State private var pendingIntroduction = false
+    @State private var tipIndex = 0
 
-    private let columns = [GridItem(.flexible()), GridItem(.flexible())]
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .footnote) private var statusIconWidth = Theme.statusIconWidth
+    @ScaledMetric(relativeTo: .footnote) private var statusSpacing = Theme.spaceS
+    @ScaledMetric(relativeTo: .title) private var scaledButtonDiameter = Theme.mainButtonDiameter
+
+    /// Main button diameter: grows with text size but stays capped so it remains a sensible circle
+    private var mainButtonDiameter: CGFloat {
+        min(max(scaledButtonDiameter, Theme.mainButtonDiameter),
+            Theme.mainButtonDiameter * Theme.mainButtonMaxScale)
+    }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    modePicker
-                    profileGrid
-                    detailSection
-                    if engine.mode == .conversation {
-                        conversationSection
-                    }
-                    visualizerPlaceholder
-                    controlSection
-                }
-                .padding()
+        GeometryReader { proxy in
+            ScrollView(.vertical) {
+                content
+                    .padding(.horizontal, Theme.spaceL)
+                    .padding(.vertical, Theme.spaceM)
+                    .frame(maxWidth: Theme.maxContentWidth)
+                    // Fills the screen at normal sizes; grows and scrolls at large text sizes
+                    .frame(maxWidth: .infinity, minHeight: proxy.size.height)
             }
-            .navigationTitle("HearingLens")
+            .scrollBounceBehavior(.basedOnSize)
         }
+        .background(Theme.background.ignoresSafeArea())
+        .tint(Theme.foreground)
         .onAppear { showOnboarding = !hasSeenOnboarding }
+        .onChange(of: engine.selectedProfile) { _, _ in tipIndex = 0 }
         .sheet(isPresented: $showOnboarding) {
             OnboardingView()
         }
-    }
-
-    // MARK: モード切替
-    private var modePicker: some View {
-        Picker("体験モード", selection: $engine.mode) {
-            ForEach(ExperienceMode.allCases) { mode in
-                Label(mode.title, systemImage: mode.symbolName).tag(mode)
+        .sheet(isPresented: $showInfo, onDismiss: {
+            // Present the introduction only after the info sheet is gone (never two sheets at once)
+            if pendingIntroduction {
+                pendingIntroduction = false
+                showOnboarding = true
             }
-        }
-        .pickerStyle(.segmented)
-    }
-
-    // MARK: 2x2 プロファイル選択
-    private var profileGrid: some View {
-        LazyVGrid(columns: columns, spacing: 12) {
-            ForEach(HearingProfile.allCases) { profile in
-                profileCard(profile)
+        }) {
+            ProfileInfoSheet(engine: engine) {
+                pendingIntroduction = true
+                showInfo = false
             }
         }
     }
 
-    private func profileCard(_ profile: HearingProfile) -> some View {
-        let isSelected = engine.selectedProfile == profile
-        return Button {
-            engine.select(profile)
-        } label: {
-            VStack(spacing: 8) {
-                Image(systemName: profile.symbolName)
-                    .font(.title)
-                    .foregroundStyle(profile.tint)
-                Text(profile.title)
-                    .font(.headline)
-                    .multilineTextAlignment(.center)
-                // 選択状態は枠線とチェックマークで示す（色だけに頼らない）
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isSelected ? profile.tint : .secondary)
+    private var content: some View {
+        VStack(spacing: Theme.spaceM) {
+            topBar
+            ripple
+            profileSummary
+            if engine.mode == .conversation {
+                conversationSection
             }
-            .frame(maxWidth: .infinity, minHeight: 110)
-            .padding(8)
-            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? profile.tint : .secondary.opacity(0.3),
-                            lineWidth: isSelected ? 3 : 1)
-            )
+            profileTabs
+            statusLine
+            bottomControls
+        }
+    }
+
+    /// Flexible in the middle at normal sizes; smaller and fixed at accessibility text sizes
+    @ViewBuilder
+    private var ripple: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            RippleView(level: 0, isActive: engine.isRunning)
+                .frame(maxWidth: .infinity)
+                .frame(height: Theme.rippleAccessibilityHeight)
+        } else {
+            RippleView(level: 0, isActive: engine.isRunning)
+                .frame(maxWidth: .infinity, minHeight: Theme.rippleMinHeight, maxHeight: .infinity)
+        }
+    }
+
+    // MARK: Top bar (mode switch + info)
+    private var topBar: some View {
+        HStack(alignment: .top) {
+            // Side by side when they fit; stacked at huge text sizes so words never break
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: Theme.spaceL) { modeButtons }
+                VStack(alignment: .leading, spacing: 0) { modeButtons }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Experience mode")
+
+            Spacer()
+
+            Button {
+                showInfo = true
+            } label: {
+                Image(systemName: "info.circle")
+                    .font(.title2.weight(Theme.symbolWeight))
+                    .foregroundStyle(Theme.foreground)
+                    .frame(minWidth: Theme.minTouchTarget, minHeight: Theme.minTouchTarget)
+            }
+            .accessibilityLabel("About this profile")
+        }
+    }
+
+    @ViewBuilder
+    private var modeButtons: some View {
+        ForEach(ExperienceMode.allCases) { mode in
+            selectableText(mode.title, isSelected: engine.mode == mode) {
+                engine.mode = mode
+            }
+        }
+    }
+
+    /// Text button whose selection is shown by weight, brightness and a small dot (no color)
+    private func selectableText(_ text: String, accessibilityLabel: String? = nil,
+                                isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: Theme.spaceXS) {
+                Text(text)
+                    .font(.body.weight(isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? Theme.foreground : Theme.secondary)
+                    // Never break a label mid-word
+                    .lineLimit(1)
+                    .fixedSize()
+                Circle()
+                    .fill(Theme.foreground)
+                    .frame(width: Theme.selectedDotSize, height: Theme.selectedDotSize)
+                    .opacity(isSelected ? 1 : 0)
+            }
+            .frame(minHeight: Theme.minTouchTarget)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(profile.title)
+        .accessibilityLabel(accessibilityLabel ?? text)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    // MARK: 解説
-    private var detailSection: some View {
-        let profile = engine.selectedProfile
-        return VStack(alignment: .leading, spacing: 8) {
-            Text(profile.title).font(.title3.bold())
-            Label("主な対象：\(profile.mainTargets)", systemImage: "person.3")
+    // MARK: Selected profile name and one-line description
+    private var profileSummary: some View {
+        VStack(spacing: Theme.spaceS) {
+            Text(engine.selectedProfile.title)
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(Theme.foreground)
+                .multilineTextAlignment(.center)
+                // Wrap at word boundaries; shrink slightly rather than break a long word
+                .minimumScaleFactor(Theme.titleMinScale)
+                // Cap only the title so its longest word still fits on one line
+                .dynamicTypeSize(...Theme.titleMaxDynamicTypeSize)
+                .accessibilityAddTraits(.isHeader)
+            Text(engine.selectedProfile.shortDescription)
                 .font(.body)
-            Text("どう聞こえるか").font(.headline)
-            Text(profile.description).font(.body)
+                .foregroundStyle(Theme.secondary)
+                .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity)
     }
 
-    // MARK: 会話モード
+    // MARK: Conversation mode (F-03 tip + F-05 practice switch)
     private var conversationSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("話し方の配慮").font(.headline)
-            ForEach(engine.selectedProfile.conversationTips, id: \.self) { tip in
-                Label(tip, systemImage: "checkmark.bubble")
-                    .font(.body)
-            }
-
-            // F-04 声量・距離チェックメーター（後続で実装）
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(.secondary, style: StrokeStyle(lineWidth: 1, dash: [4]))
-                .frame(height: 44)
-                .overlay(Text("声量メーター（F-04 で実装）").font(.footnote))
-
-            // F-05 ビフォー・アフター
-            Toggle("アドバイスを実践する", isOn: $engine.isAdviceApplied)
-                .font(.headline)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    // MARK: ビジュアライザー枠
-    private var visualizerPlaceholder: some View {
-        RoundedRectangle(cornerRadius: 12)
-            .fill(.background.secondary)
-            .frame(height: 140)
-            .overlay(Text("波形ビジュアライザー（F-02 で実装）").font(.body))
-            .accessibilityElement(children: .combine)
-    }
-
-    // MARK: 操作系
-    private var controlSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // F-06 ヘッドホン状態（アイコン + 文字）
-            Label(engine.isHeadphoneConnected ? "ヘッドホン：接続中" : "ヘッドホン：未接続",
-                  systemImage: engine.isHeadphoneConnected ? "headphones" : "headphones.slash")
-                .font(.body)
-
-            // F-07 テスト音源モード
-            Toggle("テスト音源モード", isOn: $engine.useTestSource)
-                .font(.body)
-
+        let tips = engine.selectedProfile.conversationTips
+        let tip = tips[tipIndex % tips.count]
+        return VStack(spacing: Theme.spaceS) {
             Button {
-                if engine.isRunning {
-                    engine.stop()
-                } else {
-                    Task { await engine.start() }
-                }
+                tipIndex = (tipIndex + 1) % tips.count
             } label: {
-                Label(engine.isRunning ? "停止" : "体験を開始",
-                      systemImage: engine.isRunning ? "stop.fill" : "play.fill")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                Text(tip)
+                    .font(.callout)
+                    .foregroundStyle(Theme.foreground)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, minHeight: Theme.minTouchTarget)
+                    .padding(Theme.spaceS)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.cornerRadius)
+                            .stroke(Theme.line, lineWidth: Theme.thinLineWidth)
+                    )
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(engine.isStopping || (!engine.isRunning && !engine.canStart))
+            .buttonStyle(.plain)
+            .accessibilityHint("Double-tap for the next tip")
 
-            if !engine.canStart && !engine.isRunning {
-                Text("ヘッドホンを接続するか、テスト音源モードをオンにしてください。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            Toggle("Practice the tips", isOn: $engine.isAdviceApplied)
+                .font(.body)
+                .foregroundStyle(Theme.foreground)
+        }
+    }
 
-            // 例外: マイク権限の拒否（説明 + 設定を開く導線 + テスト音源の案内）
-            if engine.micPermissionDenied {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("マイクの使用が許可されていません。設定でマイクを許可すると、自分の声や周りの音で体験できます。許可しなくても「テスト音源モード」で体験できます。",
-                          systemImage: "mic.slash")
-                        .font(.footnote)
-                    Button("設定を開く") {
-                        if let url = URL(string: UIApplication.openSettingsURLString) {
-                            UIApplication.shared.open(url)
-                        }
+    // MARK: Profile text tabs
+    private var profileTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Theme.spaceL) {
+                ForEach(HearingProfile.allCases) { profile in
+                    selectableText(profile.tabTitle,
+                                   accessibilityLabel: profile.title,
+                                   isSelected: engine.selectedProfile == profile) {
+                        engine.select(profile)
                     }
-                    .buttonStyle(.bordered)
                 }
             }
+            .padding(.horizontal, Theme.spaceXS)
+        }
+        .frame(minHeight: Theme.minTouchTarget + Theme.selectedDotSize)
+    }
 
-            // 例外: 開始失敗などのエラー（アイコン + 文字で示す）
-            if let message = engine.lastErrorMessage {
-                Label(message, systemImage: "exclamationmark.triangle")
-                    .font(.footnote)
-            }
-
-            // Bluetooth は遅延が大きいので有線を勧める
-            if engine.isBluetoothOutput {
-                Label("有線ヘッドホン推奨（Bluetooth は約150msの遅延）。Bluetooth だと音が遅れて届くため、自分の声が話しにくく感じることがあります。",
-                      systemImage: "info.circle")
-                    .font(.footnote)
+    // MARK: Status line (F-06): one short line, icon + text
+    private var statusLine: some View {
+        HStack(alignment: .firstTextBaseline, spacing: statusSpacing) {
+            Image(systemName: status.symbol)
+                .font(.footnote.weight(Theme.symbolWeight))
+                .frame(width: statusIconWidth)
+                .accessibilityHidden(true)
+            Text(status.text)
+                .font(.footnote)
+                .fixedSize(horizontal: false, vertical: true)
+            if engine.micPermissionDenied && engine.lastErrorMessage == nil {
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Theme.foreground)
             }
         }
+        .foregroundStyle(Theme.secondary)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .multilineTextAlignment(.center)
+    }
+
+    /// Status text and icon, by priority
+    private var status: (symbol: String, text: String) {
+        if let message = engine.lastErrorMessage {
+            return ("exclamationmark.triangle", message)
+        }
+        if engine.micPermissionDenied {
+            return ("mic.slash", "Microphone access is off. Allow it in Settings, or use Test Sound.")
+        }
+        if engine.isBluetoothOutput {
+            return ("info.circle", "Wired headphones recommended — Bluetooth adds about 150 ms of delay.")
+        }
+        if !engine.isHeadphoneConnected && !engine.useTestSource {
+            return ("headphones.slash", "Connect headphones, or turn on Test Sound in ⓘ")
+        }
+        if engine.isHeadphoneConnected {
+            return ("headphones", "Headphones connected")
+        }
+        return ("speaker.wave.2", "Test Sound on")
+    }
+
+    // MARK: Bottom: volume slider + main button
+    private var bottomControls: some View {
+        VStack(spacing: Theme.spaceM) {
+            HStack(spacing: Theme.spaceM) {
+                Image(systemName: "speaker.fill")
+                    .accessibilityHidden(true)
+                Slider(value: $engine.outputVolume, in: 0...HearingAudioEngine.maxOutputVolume)
+                    .accessibilityLabel("Volume")
+                Image(systemName: "speaker.wave.3.fill")
+                    .accessibilityHidden(true)
+            }
+            .font(.footnote.weight(Theme.symbolWeight))
+            .foregroundStyle(Theme.secondary)
+
+            mainButton
+        }
+    }
+
+    private var mainButton: some View {
+        let isDisabled = engine.isStopping || (!engine.isRunning && !engine.canStart)
+        return Button {
+            if engine.isRunning {
+                engine.stop()
+            } else {
+                Task { await engine.start() }
+            }
+        } label: {
+            Image(systemName: engine.isRunning ? "stop.fill" : "play.fill")
+                .font(.title.weight(Theme.symbolWeight))
+                .foregroundStyle(Theme.background)
+                .frame(width: mainButtonDiameter, height: mainButtonDiameter)
+                .background(Theme.foreground, in: Circle())
+                .opacity(isDisabled ? Theme.disabledOpacity : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .accessibilityLabel(engine.isRunning ? "Stop listening" : "Start listening")
     }
 }
 

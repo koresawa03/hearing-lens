@@ -1,56 +1,56 @@
-// F-01 フィルタ適用（音響エンジン）/ F-06 ヘッドホン検知・ハウリング防止・割り込み / F-07 テスト音源モード（仮: ノイズのみ）/ F-04 音量メーター（未実装）
+// F-01 filter application (audio engine) / F-06 headphone detection, feedback prevention, interruptions / F-07 test sound mode (provisional: noise only) / F-04 level meter (not implemented)
 //
-// ノードグラフ（音の流れ）:
+// Node graph (signal flow):
 //   inputNode ──┐
-//               ├→ sourceMixer → eq(4バンド固定) → reverb → limiter(ピークリミッター) → mainMixerNode → 出力
+//               ├→ sourceMixer → eq (4 fixed bands) → reverb → limiter (peak limiter) → mainMixerNode → output
 //   noiseNode ──┘
-//   （F-07 の話し声は、後で AVAudioPlayerNode を sourceMixer に追加する予定）
-// - ノードは init で一度だけ作って attach し、start() のたびに connect し直す
-//   （入力フォーマットが「今のルート」で変わるため）。
-// - EQ は役割の決まった4バンドを最初から持ち、使わないバンドは bypass にする。
-//   プロファイル切替は各バンドの値を書き換えるだけで、ノードをつなぎ直さない（音切れ防止）。
-// - 低遅延（ADR-0003）: IO バッファを約5msに小さくして、自分の声が遅れて返る遅延を減らす。
-// - 入力ソース別セッション（ADR-0003）: マイクは .playAndRecord + A2DP、テスト音源は .playback。
-//   入力は内蔵マイクに固定し、通話用の HFP は使わない。
-// - 聴覚保護（ADR-0002）: リミッター + 出力音量の上限 + 0 からのフェードイン。
-//   ユーザー操作の停止は短いフェードアウト、ヘッドホン抜去・割り込み・構成変更は即停止。
+//   (For the F-07 speaking voice, an AVAudioPlayerNode will be added to sourceMixer later.)
+// - Nodes are created and attached once in init, and reconnected on every start()
+//   (because the input format changes with the current route).
+// - The EQ has four bands with fixed roles from the start; unused bands are bypassed.
+//   Switching profiles only rewrites each band's values and never reconnects nodes (avoids dropouts).
+// - Low latency (ADR-0003): shrink the IO buffer to about 5 ms to reduce the delay before your own voice comes back.
+// - Per-source audio session (ADR-0003): microphone uses .playAndRecord + A2DP, test sound uses .playback.
+//   Input is pinned to the built-in microphone; the call-oriented HFP is not used.
+// - Hearing protection (ADR-0002): limiter + output volume cap + fade-in from 0.
+//   A user-initiated stop uses a short fade-out; unplugging headphones, interruptions and configuration changes stop immediately.
 import AVFoundation
 import AudioToolbox
 import Observation
 import os
 
-/// F-04 声量フィードバックの種類
+/// F-04 voice level feedback kinds
 enum VolumeFeedback {
-    case tooQuiet   // 声が小さすぎる（遠い）
-    case tooLoud    // 大きすぎる（聴覚過敏には刺激が強い）
-    case good       // 適切
+    case tooQuiet   // voice too quiet (too far away)
+    case tooLoud    // too loud (harsh for hyperacusis)
+    case good       // just right
 }
 
-/// 環境ノイズ（ピンクノイズ風）を作る小さな部品。
-/// AVAudioSourceNode の render ブロックはオーディオ専用スレッドで呼ばれ、MainActor には触れない。
-/// そのため状態（フィルタの記憶・乱数）をこのクラスにまとめ、ブロックから使う。
-/// render ブロックは1本のスレッドからしか呼ばれないので、排他制御なしの `@unchecked Sendable` とする。
+/// A small component that generates ambient noise (pink-noise-like).
+/// The AVAudioSourceNode render block runs on a dedicated audio thread and cannot touch the MainActor.
+/// So the state (filter memory, random seed) is gathered in this class and used from the block.
+/// The render block is only called from a single thread, so this is `@unchecked Sendable` without locking.
 private final class PinkNoiseGenerator: @unchecked Sendable {
-    // Paul Kellet の economy pink filter の内部状態（過去の値を覚えておくメモリ）
+    // Internal state of Paul Kellet's economy pink filter (memory of past values)
     private var b0: Float = 0
     private var b1: Float = 0
     private var b2: Float = 0
-    /// 乱数の状態（xorshift）。システム乱数はリアルタイム処理に向かないので自前で持つ
+    /// Random number state (xorshift). System randomness is unsuited to real-time processing, so we keep our own
     private var seed: UInt32 = 0x1234_5678
 
-    /// 出力の大きさ。pink の合成値は ±数倍になるので、約 ±0.2 に収まるよう縮める（目安の経験値）
+    /// Output scale. The synthesized pink value can reach several times ±1, so shrink it to about ±0.2 (rule-of-thumb value)
     private static let outputScale: Float = 0.11
 
-    /// -1...1 の白色ノイズを1つ返す
+    /// Returns one white-noise value in -1...1
     private func nextWhite() -> Float {
         seed ^= seed << 13
         seed ^= seed >> 17
         seed ^= seed << 5
-        // UInt32 の全範囲を -1...1 に写す
+        // Map the full UInt32 range onto -1...1
         return Float(seed) / Float(UInt32.max) * 2 - 1
     }
 
-    /// 1サンプル分のピンクノイズ風の値。白色ノイズを「低い音ほど強く」なるよう3段のフィルタで整える
+    /// One sample of pink-noise-like value. White noise is shaped by three filter stages so lower sounds are stronger
     func nextSample() -> Float {
         let white = nextWhite()
         b0 = 0.99765 * b0 + white * 0.0990460
@@ -60,8 +60,8 @@ private final class PinkNoiseGenerator: @unchecked Sendable {
     }
 }
 
-/// AVAudioSourceNode を作る。MainActor の外（nonisolated）で作ることで、
-/// render ブロックが MainActor 隔離を引き継がないようにする。
+/// Creates the AVAudioSourceNode. Creating it outside the MainActor (nonisolated)
+/// keeps the render block from inheriting MainActor isolation.
 private nonisolated func makeNoiseNode(format: AVAudioFormat) -> AVAudioSourceNode {
     let generator = PinkNoiseGenerator()
     return AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
@@ -76,86 +76,102 @@ private nonisolated func makeNoiseNode(format: AVAudioFormat) -> AVAudioSourceNo
     }
 }
 
-/// EQ の固定バンド。役割を決めておき、プロファイル切替でもつなぎ直さない。
+/// Fixed EQ bands. Roles are decided up front and never reconnected when switching profiles.
 ///
-/// | バンド | 種類 | 使うプロファイル |
+/// | Band | Type | Used by profile |
 /// |---|---|---|
-/// | highPass | ハイパス | 低音難聴 |
-/// | lowPass | ローパス | 高音難聴 |
-/// | bandPass | バンドパス | APD |
-/// | peak | パラメトリック（ピークEQ） | 聴覚過敏 |
+/// | highPass | high-pass | Low-Frequency Hearing Loss |
+/// | lowPass | low-pass | High-Frequency Hearing Loss |
+/// | bandPass | band-pass | APD |
+/// | peak | parametric (peak EQ) | Hyperacusis |
 private enum EQBand: Int, CaseIterable {
-    case highPass   // band0: 低い音を削る
-    case lowPass    // band1: 高い音を削る
-    case bandPass   // band2: 中域だけ通す
-    case peak       // band3: 特定の帯域を持ち上げる
+    case highPass   // band0: cuts low sounds
+    case lowPass    // band1: cuts high sounds
+    case bandPass   // band2: passes only the mid range
+    case peak       // band3: lifts a specific band
 }
 
-/// デバッグ用ログ。Xcode のコンソールで category "audio" を見る
+/// Debug log. In the Xcode console, look at category "audio"
 private let audioLogger = Logger(subsystem: "com.koresawa.HearingLens", category: "audio")
 
 @Observable
 @MainActor
 final class HearingAudioEngine {
-    // MARK: 状態
+    // MARK: State
     var selectedProfile: HearingProfile = .highFrequencyLoss {
         didSet { applyFilter(currentFilter) }
     }
     var mode: ExperienceMode = .daily
+    /// User volume (0...maxOutputVolume). Half of the cap, so it starts quiet.
+    var outputVolume: Float = 0.3 {
+        didSet {
+            let clamped = min(max(outputVolume, 0), Self.maxOutputVolume)
+            if clamped != outputVolume {
+                outputVolume = clamped
+                return
+            }
+            // Apply immediately while running, but not during fade-in/out handling
+            if isRunning && !isStopping && !isFadingIn {
+                engine.mainMixerNode.outputVolume = outputVolume
+            }
+        }
+    }
+    /// True while the fade-in is raising the volume
+    @ObservationIgnored private var isFadingIn = false
     private(set) var isRunning = false
-    /// フェードアウト中（停止処理の途中）。UI はこの間ボタンを無効にする
+    /// Fading out (mid-stop). The UI disables the button during this time
     private(set) var isStopping = false
     private(set) var isHeadphoneConnected = false
-    /// 出力が Bluetooth か（遅延が大きいので UI で注意を出す）
+    /// Whether the output is Bluetooth (large delay, so the UI shows a notice)
     private(set) var isBluetoothOutput = false
     var useTestSource = false {
         didSet {
             applyFilter(currentFilter)
-            // セッションのカテゴリがモードと食い違わないよう、稼働中に切り替わったら止める（再開はユーザー操作）
+            // Stop if this changes while running so the session category never disagrees with the mode (restart is a user action)
             if isRunning && useTestSource != oldValue {
                 stopImmediately()
             }
         }
     }
-    /// F-05 アドバイスを実践する（ONでフィルタ緩和）
+    /// F-05 Practice the tips (ON relaxes the filter)
     var isAdviceApplied = false {
         didSet { applyFilter(currentFilter) }
     }
-    /// マイク入力の音量 0...1（RMS を正規化した値）
-    /// TODO(F-04): inputNode にタップを付けて RMS を計算し、ここへ反映する
+    /// Microphone input level 0...1 (normalized RMS)
+    /// TODO(F-04): install a tap on inputNode, compute RMS and reflect it here
     var inputLevel: Float = 0
-    /// マイク権限が拒否された（UI で「設定を開く」を案内する）
+    /// Microphone permission was denied (the UI points to Open Settings)
     private(set) var micPermissionDenied = false
-    /// 直近のエラーを日本語で表示するためのメッセージ（nil ならエラーなし）
+    /// Message for showing the most recent error (nil means no error)
     var lastErrorMessage: String?
 
-    // MARK: しきい値（0...1 の正規化レベル）
-    /// これ未満は「小さすぎる」
+    // MARK: Thresholds (normalized levels 0...1)
+    /// Below this is "too quiet"
     static let quietThreshold: Float = 0.15
-    /// これ超は「大きすぎる」
+    /// Above this is "too loud"
     static let loudThreshold: Float = 0.7
 
-    // MARK: 聴覚保護・音響の定数（ADR-0002）
-    /// 出力音量の上限（0...1）。耳を守るため、どんな場合もこれを超えない。実機で聞いて調整する
+    // MARK: Hearing protection and audio constants (ADR-0002)
+    /// Output volume cap (0...1). Never exceeded in any case, to protect hearing. Tune by ear on a real device
     static let maxOutputVolume: Float = 0.6
-    /// フェードインの総時間（秒）。開始時の「ボンッ」という急な音を避ける
+    /// Total fade-in time (seconds). Avoids an abrupt thump at start
     private static let fadeInDuration: Double = 0.5
-    /// フェードインの分割数。0.5秒を10段階に分けて少しずつ上げる
+    /// Number of fade-in steps. The volume rises gradually over 10 steps across 0.5 seconds
     private static let fadeInSteps = 10
-    /// フェードアウトの総時間（秒）。ユーザー操作で止めるときの「ブツッ」という音を避ける
+    /// Total fade-out time (seconds). Avoids a click when the user stops
     private static let fadeOutDuration: Double = 0.15
-    /// フェードアウトの分割数。0.15秒を6段階に分けて少しずつ下げる
+    /// Number of fade-out steps. The volume falls gradually over 6 steps across 0.15 seconds
     private static let fadeOutSteps = 6
-    /// AVAudioSession の入出力バッファ時間（秒）。小さいほど遅延が減る（約5ms）。
-    /// 自分の声が遅れて返ると話しにくい（遅延聴覚フィードバック）ため。小さすぎると音切れするので 5ms にする（ADR-0003）
+    /// AVAudioSession IO buffer duration (seconds). Smaller means less delay (about 5 ms).
+    /// Hearing your own voice come back late makes speaking hard (delayed auditory feedback). Too small causes dropouts, so use 5 ms (ADR-0003)
     private static let preferredIOBufferDuration: TimeInterval = 0.005
-    /// 希望するサンプルレート（Hz）。48kHz は iPhone の内蔵マイク・スピーカーの標準的な値
+    /// Preferred sample rate (Hz). 48 kHz is the standard value for iPhone's built-in microphone and speaker
     private static let preferredSampleRate: Double = 48_000
-    /// テスト音源モードでの環境ノイズの最低音量。F-07 の声ループが入るまでの仮の「音が出ている」確認用
+    /// Minimum ambient noise volume in test sound mode. A provisional "sound is playing" check until the F-07 voice loop exists
     private static let testSourceMinimumNoiseVolume: Float = 0.3
-    /// ノイズ用ソースノードのサンプルレートが取れない場合の既定値
+    /// Default sample rate when the noise source node's rate is unavailable
     private static let fallbackSampleRate: Double = 44_100
-    /// EQ のローパス/ハイパスで使う帯域幅（オクターブ）。カットオフ付近の立ち上がり方の目安
+    /// Bandwidth (octaves) used by the EQ low-pass/high-pass. A guide for how the response rises near the cutoff
     private static let passFilterBandwidth: Float = 0.5
 
     var volumeFeedback: VolumeFeedback {
@@ -164,23 +180,23 @@ final class HearingAudioEngine {
         return .good
     }
 
-    /// 現在適用すべきフィルタ値（F-05 の ON/OFF を反映）
+    /// The filter values to apply now (reflects the F-05 on/off state)
     var currentFilter: FilterParameters {
         let base = selectedProfile.filter
         return isAdviceApplied ? base.relaxed : base
     }
 
-    /// 開始可能か（ヘッドホン接続 or テスト音源）
+    /// Whether starting is possible (headphones connected or test sound)
     var canStart: Bool { isHeadphoneConnected || useTestSource }
 
-    // MARK: ノード（init で一度だけ作る）
+    // MARK: Nodes (created once in init)
     @ObservationIgnored private let engine = AVAudioEngine()
-    /// マイクとノイズを1本にまとめるミキサー
+    /// Mixer that combines microphone and noise into one stream
     @ObservationIgnored private let sourceMixer = AVAudioMixerNode()
-    /// 4バンド固定のEQ。バンドの役割は EQBand を参照
+    /// EQ with four fixed bands. See EQBand for each band's role
     @ObservationIgnored private let eq = AVAudioUnitEQ(numberOfBands: EQBand.allCases.count)
     @ObservationIgnored private let reverb = AVAudioUnitReverb()
-    /// 出力段のピークリミッター（Apple 標準の AudioUnit）。急な大音量を抑える
+    /// Peak limiter on the output stage (Apple's standard AudioUnit). Suppresses sudden loud sounds
     @ObservationIgnored private let limiter = AVAudioUnitEffect(
         audioComponentDescription: AudioComponentDescription(
             componentType: kAudioUnitType_Effect,
@@ -191,14 +207,14 @@ final class HearingAudioEngine {
         )
     )
     @ObservationIgnored private let noiseNode: AVAudioSourceNode
-    /// ノイズ用のモノラルフォーマット（ソースノードとミキサーの接続で使う）
+    /// Mono format for the noise (used to connect the source node to the mixer)
     @ObservationIgnored private let noiseFormat: AVAudioFormat
-    /// マイク入力ノードを今つないでいるか（テスト音源モードではつながない）
+    /// Whether the microphone input node is currently connected (not connected in test sound mode)
     @ObservationIgnored private var isInputConnected = false
     @ObservationIgnored private var fadeTask: Task<Void, Never>?
 
-    // MARK: 初期化
-    // NotificationCenter の token は deinit で触らないため、Engine は寿命がアプリと同じ前提
+    // MARK: Initialization
+    // NotificationCenter tokens are not touched in deinit, so the engine is assumed to live as long as the app
     @ObservationIgnored private var routeObserver: NSObjectProtocol?
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var configurationObserver: NSObjectProtocol?
@@ -206,7 +222,7 @@ final class HearingAudioEngine {
     init() {
         let sessionRate = AVAudioSession.sharedInstance().sampleRate
         let rate = sessionRate > 0 ? sessionRate : Self.fallbackSampleRate
-        // AVAudioFormat の生成が失敗することは通常ないが、force unwrap を避けてフォールバックする
+        // Creating an AVAudioFormat rarely fails, but fall back instead of force-unwrapping
         let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)
             ?? AVAudioFormat(standardFormatWithSampleRate: Self.fallbackSampleRate, channels: 1)
             ?? AVAudioFormat()
@@ -222,7 +238,7 @@ final class HearingAudioEngine {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            // Notification 自体はアクター間で渡せないので、理由の値（UInt）だけ先に取り出す
+            // The Notification itself can't cross actors, so extract only the reason value (UInt) first
             let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
             Task { @MainActor in
                 self?.handleRouteChange(reasonValue: reasonValue)
@@ -234,14 +250,14 @@ final class HearingAudioEngine {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            // Notification 自体はアクター間で渡せないので、必要な値（UInt）だけ先に取り出す
+            // The Notification itself can't cross actors, so extract only the needed value (UInt) first
             let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
             Task { @MainActor in
                 self?.handleInterruption(typeValue: typeValue)
             }
         }
 
-        // エンジン構成変更（入出力フォーマットの変化など）。エンジンは自分で止まるので状態を合わせる
+        // Engine configuration change (e.g. input/output format change). The engine stops itself, so sync our state
         configurationObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine,
@@ -253,7 +269,7 @@ final class HearingAudioEngine {
         }
     }
 
-    /// ノードをエンジンに取り付け、EQ とリミッターの初期値を決める（接続は start で行う）
+    /// Attaches nodes to the engine and sets initial EQ and limiter values (connecting happens in start)
     private func setupNodes() {
         engine.attach(sourceMixer)
         engine.attach(noiseNode)
@@ -261,9 +277,9 @@ final class HearingAudioEngine {
         engine.attach(reverb)
         engine.attach(limiter)
 
-        // 帯域ごとの役割（種類）は固定で、周波数などの値は applyFilter が入れる
+        // Each band's role (type) is fixed; applyFilter fills in values such as frequency
         eq.globalGain = 0
-        // 種類はここで一度だけ決める。使わない間は bypass にしておく
+        // The type is set only once, here. Keep bands bypassed while unused
         eq.bands[EQBand.highPass.rawValue].filterType = .highPass
         eq.bands[EQBand.lowPass.rawValue].filterType = .lowPass
         eq.bands[EQBand.bandPass.rawValue].filterType = .bandPass
@@ -272,15 +288,15 @@ final class HearingAudioEngine {
             band.bypass = true
         }
 
-        // 開始前は無音。フェードインで上げる
+        // Silent before starting. The fade-in raises it
         engine.mainMixerNode.outputVolume = 0
     }
 
-    // MARK: F-01 フィルタ適用
-    /// FilterParameters をノードの値に写す。エンジンが動いていても止まっていても呼べる。
-    /// 方針: 各バンドは役割が固定（EQBand）。使わないバンドは bypass にする。ノードはつなぎ直さない。
+    // MARK: F-01 Apply filters
+    /// Maps FilterParameters onto node values. Can be called whether or not the engine is running.
+    /// Policy: each band has a fixed role (EQBand). Unused bands are bypassed. Nodes are never reconnected.
     private func applyFilter(_ p: FilterParameters) {
-        // highPass: ハイパス
+        // highPass: high-pass
         let hp = eq.bands[EQBand.highPass.rawValue]
         if let cutoff = p.highPassCutoff {
             hp.frequency = cutoff
@@ -290,7 +306,7 @@ final class HearingAudioEngine {
             hp.bypass = true
         }
 
-        // lowPass: ローパス
+        // lowPass: low-pass
         let lp = eq.bands[EQBand.lowPass.rawValue]
         if let cutoff = p.lowPassCutoff {
             lp.frequency = cutoff
@@ -300,7 +316,7 @@ final class HearingAudioEngine {
             lp.bypass = true
         }
 
-        // bandPass: バンドパス（APD）
+        // bandPass: band-pass (APD)
         let bandPass = eq.bands[EQBand.bandPass.rawValue]
         if let bp = p.bandPass {
             bandPass.frequency = bp.center
@@ -310,7 +326,7 @@ final class HearingAudioEngine {
             bandPass.bypass = true
         }
 
-        // peak: パラメトリック（聴覚過敏の高域ブースト）
+        // peak: parametric (high-frequency boost for hyperacusis)
         let peakBand = eq.bands[EQBand.peak.rawValue]
         if let peak = p.peakEQ {
             peakBand.frequency = peak.frequency
@@ -321,7 +337,7 @@ final class HearingAudioEngine {
             peakBand.bypass = true
         }
 
-        // リバーブ: プリセットがなければ wet を 0 にして素通しにする
+        // Reverb: with no preset, set wet to 0 to pass the signal through
         if let preset = p.reverbPreset {
             reverb.loadFactoryPreset(preset)
             reverb.wetDryMix = p.reverbWetDryMix
@@ -329,16 +345,16 @@ final class HearingAudioEngine {
             reverb.wetDryMix = 0
         }
 
-        // 環境ノイズの音量は noiseNode.volume だけで調整する（生成側の大きさは固定）。
-        // テスト音源モードでは、声ループ（F-07）ができるまで音が出ていることを確認できるよう最低音量を保証する
+        // Ambient noise volume is adjusted only through noiseNode.volume (the generator's scale is fixed).
+        // In test sound mode, guarantee a minimum volume so you can tell sound is playing until the voice loop (F-07) exists
         let noiseVolume = useTestSource
             ? max(p.noiseMix, Self.testSourceMinimumNoiseVolume)
             : p.noiseMix
         noiseNode.volume = noiseVolume
     }
 
-    // MARK: F-06 ヘッドホン検知
-    // HFP（.bluetoothHFP）は通話用で帯域が狭く、高音域の体験が成立しないため含めない（ADR-0003）
+    // MARK: F-06 Headphone detection
+    // HFP (.bluetoothHFP) is for calls with narrow bandwidth, so the high-frequency experience would not work; excluded (ADR-0003)
     private static let headphonePortTypes: Set<AVAudioSession.Port> = [
         .headphones, .bluetoothA2DP, .bluetoothLE, .usbAudio
     ]
@@ -346,7 +362,7 @@ final class HearingAudioEngine {
         .bluetoothA2DP, .bluetoothLE
     ]
 
-    /// 現在の出力ルートにヘッドホン類があるか確認して反映する
+    /// Checks whether the current output route has headphones and reflects it
     func refreshRoute() {
         let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
         isHeadphoneConnected = outputs.contains { Self.headphonePortTypes.contains($0.portType) }
@@ -357,36 +373,36 @@ final class HearingAudioEngine {
         refreshRoute()
         guard isRunning else { return }
         let reason = reasonValue.flatMap { AVAudioSession.RouteChangeReason(rawValue: $0) }
-        // ヘッドホンが外れた → ハウリング防止のため、フェードせず即停止
+        // Headphones removed: stop immediately without fading, to prevent feedback
         if reason == .oldDeviceUnavailable && !isHeadphoneConnected {
             stopImmediately()
             return
         }
-        // 保険: 理由が何であれ、マイクモードでヘッドホンがなければ止める（テスト音源は例外）
-        // .newDeviceAvailable（接続）では何もしない。自動で開始はせず、ユーザー操作を待つ
+        // Safety net: whatever the reason, stop if in microphone mode without headphones (test sound is exempt)
+        // Do nothing for .newDeviceAvailable (connected). Never start automatically; wait for the user
         if !useTestSource && !isHeadphoneConnected {
             stopImmediately()
         }
     }
 
-    // MARK: 割り込み（電話・Siri など）
+    // MARK: Interruptions (calls, Siri, etc.)
     private func handleInterruption(typeValue: UInt?) {
         guard let typeValue, let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
-        // 開始時は即停止する。終了時は急に音が出ないよう、自動再開せずユーザー操作を待つ
+        // Stop immediately when it begins. When it ends, do not resume automatically (to avoid sudden sound); wait for the user
         if type == .began {
             stopImmediately()
         }
     }
 
-    // MARK: エンジン構成変更
+    // MARK: Engine configuration change
     private func handleConfigurationChange() {
-        // 自動再開はしない（急に音が出ないように）。停止状態をUIへ反映するだけ
+        // No automatic restart (to avoid sudden sound). Just reflect the stopped state in the UI
         if isRunning {
             stopImmediately()
         }
     }
 
-    // MARK: 操作
+    // MARK: Actions
     func start() async {
         guard canStart, !isRunning, !isStopping else { return }
         lastErrorMessage = nil
@@ -399,38 +415,38 @@ final class HearingAudioEngine {
                 micPermissionDenied = true
                 return
             }
-            // 権限ダイアログの間に状況が変わったかもしれないので確認し直す
+            // Conditions may have changed during the permission dialog, so check again
             guard canStart, !isRunning, !isStopping else { return }
         }
 
         do {
             let session = AVAudioSession.sharedInstance()
             if needsMic {
-                // .defaultToSpeaker は付けない: スピーカー出力にするとマイクが拾ってハウリングするため
+                // Do not add .defaultToSpeaker: speaker output would be picked up by the microphone and cause feedback
                 try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothA2DP])
             } else {
-                // テスト音源はマイクを使わないのでハウリングの心配がない。
-                // .playAndRecord のままだとヘッドホンなしで小さいレシーバー（受話口）から鳴るため、
-                // .playback にして内蔵スピーカーから出す（ヘッドホンなしの審査員向け）
+                // Test sound does not use the microphone, so there is no feedback risk.
+                // With .playAndRecord and no headphones, sound would come from the small receiver (earpiece),
+                // so use .playback to play through the built-in speaker (for reviewers without headphones)
                 try session.setCategory(.playback, mode: .default, options: [])
             }
-            // OS は希望どおりにしないことがあるので「希望」として伝え、実際の値はログで確認する
+            // The OS may not honor these, so pass them as preferences and check the actual values in the log
             try session.setPreferredSampleRate(Self.preferredSampleRate)
             try session.setPreferredIOBufferDuration(Self.preferredIOBufferDuration)
             try session.setActive(true)
             logAudioSession(session)
 
             if needsMic {
-                // 入力は内蔵マイクに固定する。OS 任せだと Bluetooth などのマイクに切り替わってしまう（ADR-0003）
+                // Pin input to the built-in microphone. Left to the OS, it could switch to a Bluetooth microphone (ADR-0003)
                 guard let builtInMic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) else {
-                    lastErrorMessage = "内蔵マイクが見つかりませんでした"
+                    lastErrorMessage = "Built-in microphone not found."
                     stopImmediately()
                     return
                 }
                 try session.setPreferredInput(builtInMic)
             }
 
-            // カテゴリ変更でルートが変わることがあるので確認し直す
+            // Changing the category can change the route, so check again
             refreshRoute()
             guard canStart else {
                 deactivateSession()
@@ -438,7 +454,7 @@ final class HearingAudioEngine {
             }
 
             guard try connectGraph(useMic: needsMic) else {
-                lastErrorMessage = "マイク入力を取得できませんでした"
+                lastErrorMessage = "Couldn't access microphone input."
                 deactivateSession()
                 return
             }
@@ -449,16 +465,17 @@ final class HearingAudioEngine {
             isRunning = true
             startFadeIn()
         } catch {
-            lastErrorMessage = "オーディオを開始できませんでした。ヘッドホンの接続を確認して、もう一度お試しください。"
+            lastErrorMessage = "Couldn't start audio. Check your headphones and try again."
             stopImmediately()
         }
     }
 
-    /// ユーザー操作の停止。短いフェードアウトのあとに止める（クリック音を避ける）
+    /// User-initiated stop. Stops after a short fade-out (avoids a click)
     func stop() {
         guard isRunning, !isStopping else { return }
         isStopping = true
-        fadeTask?.cancel() // フェードイン中なら先にやめる
+        fadeTask?.cancel() // If fading in, cancel that first
+        isFadingIn = false
         let startVolume = engine.mainMixerNode.outputVolume
         fadeTask = Task { @MainActor [weak self] in
             let steps = Self.fadeOutSteps
@@ -470,29 +487,29 @@ final class HearingAudioEngine {
                 self.engine.mainMixerNode.outputVolume = startVolume * ratio
                 try? await Task.sleep(for: .seconds(interval))
             }
-            // 途中で即停止などに切り替わっていたら何もしない
+            // If it switched to an immediate stop or similar midway, do nothing
             if Task.isCancelled { return }
             self?.teardown()
         }
     }
 
-    /// フェードなしの即停止。ヘッドホン抜去・割り込み・構成変更など、安全のため急いで止める場面で使う
+    /// Immediate stop without fading. Used when stopping fast matters for safety, such as headphone removal, interruptions and configuration changes
     private func stopImmediately() {
         teardown()
     }
 
     func select(_ profile: HearingProfile) {
-        // フィルタ値の反映は selectedProfile の didSet が行う（稼働中でも再起動なし）
+        // The didSet of selectedProfile applies the filter values (no restart even while running)
         selectedProfile = profile
     }
 
-    // MARK: グラフ接続・後片付け
-    /// ノードをつなぐ。マイクが使えない場合は false を返す。
+    // MARK: Graph connection and cleanup
+    /// Connects the nodes. Returns false if the microphone is unavailable.
     private func connectGraph(useMic: Bool) throws -> Bool {
         engine.stop()
 
         if useMic {
-            // マイク入力の形式は、今のルートが決まってからでないと分からない
+            // The microphone input format is only known once the current route is settled
             let input = engine.inputNode
             let inputFormat = input.outputFormat(forBus: 0)
             guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else {
@@ -501,7 +518,7 @@ final class HearingAudioEngine {
             engine.connect(input, to: sourceMixer, fromBus: 0, toBus: 0, format: inputFormat)
             isInputConnected = true
         } else if isInputConnected {
-            // テスト音源モードではマイクをつながない（自分の出力を拾ってフィードバックするのを避ける）
+            // Do not connect the microphone in test sound mode (avoids picking up our own output and feeding back)
             engine.disconnectNodeOutput(engine.inputNode)
             isInputConnected = false
         }
@@ -514,9 +531,10 @@ final class HearingAudioEngine {
         return true
     }
 
-    /// フェードイン: 0 から上限まで約0.5秒で少しずつ音量を上げる。上限は絶対に超えない
+    /// Fade-in: raises the volume gradually from 0 to the user's volume over about 0.5 seconds. Never exceeds the cap
     private func startFadeIn() {
         fadeTask?.cancel()
+        isFadingIn = true
         fadeTask = Task { @MainActor [weak self] in
             let steps = Self.fadeInSteps
             let interval = Self.fadeInDuration / Double(steps)
@@ -524,16 +542,19 @@ final class HearingAudioEngine {
                 if Task.isCancelled { return }
                 guard let self else { return }
                 let ratio = Float(step) / Float(steps)
-                self.engine.mainMixerNode.outputVolume = min(ratio * Self.maxOutputVolume, Self.maxOutputVolume)
+                // The target is the current user volume (re-read each step so slider moves are respected)
+                self.engine.mainMixerNode.outputVolume = min(ratio * self.outputVolume, Self.maxOutputVolume)
                 try? await Task.sleep(for: .seconds(interval))
             }
+            self?.isFadingIn = false
         }
     }
 
-    /// 停止の共通処理。エンジン・フェード・音量・セッションを元に戻す
+    /// Common stop handling. Restores the engine, fades, volume and session
     private func teardown() {
         fadeTask?.cancel()
         fadeTask = nil
+        isFadingIn = false
         engine.stop()
         engine.mainMixerNode.outputVolume = 0
         deactivateSession()
@@ -542,7 +563,7 @@ final class HearingAudioEngine {
         inputLevel = 0
     }
 
-    /// 実際に適用されたバッファ時間・サンプルレート・ルートをログに出す（希望どおりか実機で確認するため）
+    /// Logs the buffer duration, sample rate and route actually applied (to check on a real device whether preferences were honored)
     private func logAudioSession(_ session: AVAudioSession) {
         let route = session.currentRoute
         let inputs = route.inputs.map { $0.portType.rawValue }.joined(separator: ",")
@@ -552,12 +573,12 @@ final class HearingAudioEngine {
         audioLogger.info("ioBufferDuration=\(ioBuffer, privacy: .public)s sampleRate=\(sampleRate, privacy: .public)Hz inputs=\(inputs, privacy: .public) outputs=\(outputs, privacy: .public)")
     }
 
-    /// セッションを閉じる。他アプリの音声を元に戻すよう通知する。失敗しても致命的ではないので無視する
+    /// Closes the session. Notifies others so other apps' audio resumes. A failure is not fatal, so it is ignored
     private func deactivateSession() {
         do {
             try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         } catch {
-            // 非アクティブ化の失敗は、すでに停止済みのため UI には出さない
+            // A deactivation failure is not shown in the UI because we have already stopped
         }
     }
 }

@@ -1,4 +1,4 @@
-// アプリのエントリーポイント（全機能の起点 / S-02 を表示）
+// App entry point (starting point for all features / shows S-02)
 import SwiftUI
 
 @main
