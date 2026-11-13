@@ -1,4 +1,4 @@
-// F-08 オンボーディング / S-01 オンボーディング画面
+// F-08 onboarding / S-01 onboarding screen
 import SwiftUI
 
 struct OnboardingView: View {
@@ -6,57 +6,77 @@ struct OnboardingView: View {
     @Environment(\.dismiss) private var dismiss
 
     private let steps: [(symbol: String, text: String)] = [
-        ("headphones", "ヘッドホンをつける"),
-        ("ear", "聞こえ方を選ぶ"),
-        ("person.2.wave.2", "会話モードで配慮を試す")
+        ("headphones", "Put on headphones"),
+        ("ear", "Choose a way of hearing"),
+        ("person.2.wave.2", "Try considerate speaking in Conversation mode")
     ]
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                Text("HearingLens へようこそ")
-                    .font(.largeTitle.bold())
+            VStack(alignment: .leading, spacing: Theme.spaceL) {
+                Text("Welcome to HearingLens")
+                    .font(.largeTitle.weight(.semibold))
+                    .foregroundStyle(Theme.foreground)
+                    .accessibilityAddTraits(.isHeader)
 
-                Text("若者から高齢者まで、見た目では分からない聞こえ方の多様性を体験し、話し方の配慮を身につけるためのアプリです。")
+                Text("Many differences in hearing can't be seen — from teenagers to older adults. Experience how others may hear, and learn small ways to speak so you're understood.")
                     .font(.body)
+                    .foregroundStyle(Theme.foreground)
 
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("使い方").font(.headline)
+                VStack(alignment: .leading, spacing: Theme.spaceM) {
                     ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
-                        Label("\(index + 1). \(step.text)", systemImage: step.symbol)
-                            .font(.body)
+                        HStack(alignment: .top, spacing: Theme.spaceM) {
+                            Image(systemName: step.symbol)
+                                .font(.title3.weight(Theme.symbolWeight))
+                                .frame(width: Theme.iconColumnWidth)
+                                .accessibilityHidden(true)
+                            Text("\(index + 1). \(step.text)")
+                                .font(.body)
+                        }
+                        .foregroundStyle(Theme.foreground)
+                        .accessibilityElement(children: .combine)
                     }
                 }
 
-                noteRow(symbol: "info.circle", title: "ご注意",
-                        text: "この体験は聞こえ方の近似であり、医学的な再現ではありません。")
-                noteRow(symbol: "speaker.wave.2", title: "安全のために",
-                        text: "音量は控えめから始めてください。ヘッドホンを使用します。")
+                Rectangle().fill(Theme.line).frame(height: Theme.thinLineWidth)
+
+                noteRow(symbol: "info.circle", title: "Please note",
+                        text: "This is an approximation for understanding, not a medical simulation.")
+                noteRow(symbol: "speaker.wave.2", title: "For your safety",
+                        text: "Start at a low volume and use headphones.")
 
                 Button {
                     hasSeenOnboarding = true
                     dismiss()
                 } label: {
-                    Text("はじめる")
+                    Text("Get Started")
                         .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
+                        .foregroundStyle(Theme.background)
+                        .frame(maxWidth: .infinity, minHeight: Theme.minTouchTarget)
+                        .background(Theme.foreground, in: Capsule())
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .buttonStyle(.plain)
             }
-            .padding()
+            .padding(Theme.spaceL)
+            .frame(maxWidth: Theme.maxContentWidth)
+            .frame(maxWidth: .infinity)
         }
+        .background(Theme.background.ignoresSafeArea())
+        .tint(Theme.foreground)
     }
 
     private func noteRow(symbol: String, title: String, text: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: symbol).font(.title3)
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top, spacing: Theme.spaceM) {
+            Image(systemName: symbol)
+                .font(.title3.weight(Theme.symbolWeight))
+                .frame(width: Theme.iconColumnWidth)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: Theme.spaceXS) {
                 Text(title).font(.headline)
-                Text(text).font(.body)
+                Text(text).font(.body).foregroundStyle(Theme.secondary)
             }
         }
+        .foregroundStyle(Theme.foreground)
         .accessibilityElement(children: .combine)
     }
 }

@@ -1,5 +1,31 @@
 # update.md — 進捗ログ（追記型・新しいものが上）
 
+## 2026-11-13 18:00 — UI リデザイン（完全モノクロ・中央ビジュアル）＋アプリ内英語化
+
+### 立案
+- 依頼: 機能を増やさず、見た目と画面構成を変更する。完全モノクロ・黒基調・色覚の多様性に配慮。SSC 規約（All content must be in English）に合わせ、アプリ内の文字列をすべて英語にする。
+- 計画（要約）:
+  - docs 先行: design.md 1〜3章、ADR-0004、aim.md を更新してから実装する
+  - 新規 `Theme.swift`（色・余白・字間などの値を集約。OS のライト/ダークに連動）、`RippleView.swift`（中央の波紋。`level` 0...1 と `isActive` を入力に持つ。今回は静止＋稼働中の呼吸のみ）、`ProfileInfoSheet.swift`（ⓘ シート）
+  - `ContentView` を新レイアウト（上部バー／中央の波紋／プロファイル名＋説明／アドバイス／文字タブ／状態1行／音量スライダー＋丸い主ボタン）に作り直す
+  - `HearingProfile` から `tint` を削除し、`shortDescription`・`tabTitle` を追加。`HearingAudioEngine` に `outputVolume` を追加しエラー文言を英語化。`Package.swift` のマイク用途説明を英語化
+  - 英語文言は承認済みプラン（`~/.claude/plans/steady-wibbling-reef.md`）の文言表に従う
+- 影響範囲: Theme.swift / RippleView.swift / ProfileInfoSheet.swift（新規）、ContentView / OnboardingView / HearingProfile / HearingAudioEngine / Package.swift、docs/design.md 1〜3章、docs/adr/0004、aim.md、teach.md 第5章、detail.md、tasks/todo.md
+- ブランチ: feat/ui-redesign
+
+### 進捗
+- docs 先行の更新を開始（design.md、ADR-0004、aim.md）。コードは次の工程。
+- コード実装（editor）: 新規 `Theme.swift` / `RippleView.swift` / `ProfileInfoSheet.swift`、`ContentView` を新レイアウトに全面書き換え、`OnboardingView` をモノクロ・英語化、`HearingProfile` から `tint` を削除して `tabTitle` / `shortDescription` を追加し全文字列を英語化、`HearingAudioEngine` に `outputVolume`（初期 0.3、上限 `maxOutputVolume` に丸め、稼働中は即反映、フェードインの到達値）を追加しエラー文言を英語化、`Package.swift` のマイク用途説明を英語化。Swift コメントはすべて英語化。
+- コントラスト比（計算値）: 補足文字（前景 65%）は ダーク約 8.4:1、ライト約 5.7:1（どちらも 4.5:1 以上）。
+- ビルド: xcodebuild（iPhone 17 シミュレータ）BUILD SUCCEEDED、自作コードの警告なし（AppIntents メタデータの警告のみ）。
+- 日本語 grep（`HearingLens.swiftpm` の `*.swift`）: 0件。Theme.swift 以外に色リテラルなし（`Package.swift` の `accentColor: .presetColor(.indigo)` のみ。外すと placeholder アイコンのアセット生成でビルドが失敗するため残し、UI は `.tint(Theme.foreground)` で上書き）。
+- 残課題: VoiceOver 実地確認、Accessibility Inspector のコントラスト監査、実機での見た目確認（ダーク/ライト、Dynamic Type 最大、Reduce Motion、iPad）。teach.md 第5章は別担当。
+- 最大 Dynamic Type でのはみ出しを修正（S-02 を縦スクロール化、波紋の固定高、タイトルの縮小、状態行とボタンの @ScaledMetric 化）。
+
+#### ユーザー向け確認手順
+1. VoiceOver をオンにして、全操作を読み上げで確認する: モード切替（Experience mode の中の Everyday / Conversation、選択中が分かること）、プロファイルのタブ（正式名で読まれ、選択中が分かること）、ⓘ（About this profile）、アドバイスのタップ（Double-tap for the next tip）、Practice the tips のスイッチ、音量スライダー（Volume）、主ボタン（Start listening / Stop listening）、ⓘ シート内の Test Sound スイッチ
+2. Xcode > Open Developer Tool > Accessibility Inspector でシミュレーターか実機を選び、Audit を実行する。コントラストや Dynamic Type の警告が出ないことを確認する
+
 ## 2026-11-13 17:00 — フェーズ2-A: 音響エンジンの土台と安全まわり
 
 ### 立案

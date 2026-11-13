@@ -1,6 +1,6 @@
 // swift-tools-version: 5.9
 
-// F-08 / 全体: Swift Playgrounds App パッケージ定義（マイク権限・対応端末などを宣言）
+// F-08 / overall: Swift Playgrounds App package definition (declares microphone permission, supported devices, etc.)
 import PackageDescription
 import AppleProductTypes
 
@@ -18,6 +18,7 @@ let package = Package(
             displayVersion: "1.0",
             bundleVersion: "1",
             appIcon: .placeholder(icon: .mic),
+            // Required by the placeholder icon (the build fails without it). Never shown: the UI overrides tint with Theme.foreground
             accentColor: .presetColor(.indigo),
             supportedDeviceFamilies: [
                 .pad,
@@ -30,7 +31,7 @@ let package = Package(
                 .portraitUpsideDown(.when(deviceFamilies: [.pad]))
             ],
             capabilities: [
-                .microphone(purposeString: "周囲の音や声に聞こえ方のフィルタをかけてヘッドホンで体験するためにマイクを使います。音声は録音・保存・送信しません。")
+                .microphone(purposeString: "HearingLens uses the microphone to apply hearing filters to nearby sounds and voices, played back through your headphones. Audio is never recorded, saved or sent.")
             ],
             appCategory: .education
         )

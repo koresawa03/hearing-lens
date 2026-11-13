@@ -12,6 +12,21 @@
 - [ ] ドラフトPR
 - [ ] SSC 提出要項の確認（生成AI利用の申告欄の有無、最新の制約）
 
+## UI リデザイン（完全モノクロ・中央ビジュアル・英語化）
+- [x] Theme.swift（色・余白・サイズの集約。コントラスト比を計算: ダーク約 8.4:1 / ライト約 5.7:1）
+- [x] RippleView.swift（Canvas の同心円、呼吸アニメ、Reduce Motion で静止）
+- [x] ProfileInfoSheet.swift（ⓘ シート: 詳細・Test Sound・オンボーディング再表示）
+- [x] ContentView を中央ビジュアル型に再構成（モード切替・波紋・文字タブ・状態1行・音量スライダー・丸い主ボタン）
+- [x] OnboardingView を同じ見た目に揃える
+- [x] HearingProfile: `tint` 削除、`tabTitle` / `shortDescription` 追加、全文字列を英語化
+- [x] HearingAudioEngine: `outputVolume` 追加、エラー文言を英語化
+- [x] Package.swift のマイク用途説明を英語化
+- [x] Swift コメントをすべて英語化、日本語 grep 0件
+- [x] xcodebuild BUILD SUCCEEDED
+- [ ] VoiceOver 実地確認（ユーザー）
+- [ ] Accessibility Inspector のコントラスト監査（ユーザー）
+- [ ] 実機での見た目確認（ダーク/ライト、Dynamic Type 最大、Reduce Motion、iPad）
+
 ## フェーズ2-A: 音響エンジンの土台と安全まわり（F-01, F-06）
 - [x] F-01 AVAudioEngine のノードグラフ構築（入力 → EQ → リバーブ → リミッター → 出力）
 - [x] F-01 EQ を4バンド固定（HPF / LPF / バンドパス / ピークEQ）、使わないバンドは bypass、つなぎ直さない
