@@ -25,7 +25,7 @@ Swift Student Challenge（SSC）への提出作品。
 
 ### よく使うコマンド
 ```bash
-cd HearingLens.swiftpm && xcodebuild -scheme HearingLens -destination 'generic/platform=iOS Simulator' build
+cd HearingLens.swiftpm && xcodebuild -scheme HearingLens -destination 'platform=iOS Simulator,name=iPhone 17' build
 open HearingLens.swiftpm   # Xcode / Swift Playgrounds で開く
 ```
 

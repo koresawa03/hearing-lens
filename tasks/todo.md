@@ -5,9 +5,10 @@
 - [x] GitHub リポジトリ作成
 - [x] 運用ドキュメント（CLAUDE.md / aim.md / detail.md / teach.md / docs/design.md / ADR / editor エージェント）
 - [x] .swiftpm 骨組み
-- [ ] ビルド確認
-  - 注: swiftc typecheck（iOS 17 シミュレータターゲット、strict concurrency complete）は 0 errors / 0 warnings で通過。xcodebuild 本体は、iOS 26.5 シミュレータプラットフォームが Xcode に未インストール（Xcode > Settings > Components）のため未実施
-- [ ] Xcode / Swift Playgrounds で起動確認（ユーザー）
+- [x] ビルド確認
+  - iOS 26.5 シミュレータを `xcodebuild -downloadPlatform iOS` で導入。`xcodebuild -scheme HearingLens -destination 'platform=iOS Simulator,name=iPhone 17' build` → BUILD SUCCEEDED（警告は AppIntents メタデータ抽出スキップのみ。AppIntents 未使用のため無害）
+- [x] Xcode / Swift Playgrounds で起動確認
+  - シミュレーターで確認済み（S-01/S-02 の表示・操作は設計どおり）。実機・Swift Playgrounds(iPad)での確認は今後
 - [ ] ドラフトPR
 - [ ] SSC 提出要項の確認（生成AI利用の申告欄の有無、最新の制約）
 

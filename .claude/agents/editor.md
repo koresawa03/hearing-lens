@@ -13,7 +13,7 @@ model: sonnet
 3. CLAUDE.md の「安全・プライバシー」を必ず守る（録音・保存・送信をしない、ネットワーク通信なし、リミッターと音量上限、ヘッドホン未接続でパススルーしない）
 4. Swift ファイルの先頭に機能ID・画面IDをコメントで書く。調整用の数値は `FilterParameters` や定数に集約し、マジックナンバーを書かない。強制アンラップは使わない
 5. 新規ファイルを作ったら、同じ作業の中で detail.md に追記する。大幅変更・削除・リネームでも更新する
-6. 変更後に CLAUDE.md の xcodebuild コマンド（`cd HearingLens.swiftpm && xcodebuild -scheme HearingLens -destination 'generic/platform=iOS Simulator' build`）を実行し、結果を報告する（コード変更がないドキュメントのみの作業では不要）
+6. 変更後に CLAUDE.md の xcodebuild コマンド（`cd HearingLens.swiftpm && xcodebuild -scheme HearingLens -destination 'platform=iOS Simulator,name=iPhone 17' build`）を実行し、結果を報告する（コード変更がないドキュメントのみの作業では不要）
 7. git は実行しない（commit / push はメインが行う）
 8. 最後に次の形式で報告する:
    - 変更したファイル一覧
