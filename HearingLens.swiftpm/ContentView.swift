@@ -137,7 +137,11 @@ struct ContentView: View {
                 .font(.body)
 
             Button {
-                if engine.isRunning { engine.stop() } else { engine.start() }
+                if engine.isRunning {
+                    engine.stop()
+                } else {
+                    Task { await engine.start() }
+                }
             } label: {
                 Label(engine.isRunning ? "停止" : "体験を開始",
                       systemImage: engine.isRunning ? "stop.fill" : "play.fill")
@@ -147,12 +151,40 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(!engine.isRunning && !engine.canStart)
+            .disabled(engine.isStopping || (!engine.isRunning && !engine.canStart))
 
             if !engine.canStart && !engine.isRunning {
                 Text("ヘッドホンを接続するか、テスト音源モードをオンにしてください。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+
+            // 例外: マイク権限の拒否（説明 + 設定を開く導線 + テスト音源の案内）
+            if engine.micPermissionDenied {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("マイクの使用が許可されていません。設定でマイクを許可すると、自分の声や周りの音で体験できます。許可しなくても「テスト音源モード」で体験できます。",
+                          systemImage: "mic.slash")
+                        .font(.footnote)
+                    Button("設定を開く") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            // 例外: 開始失敗などのエラー（アイコン + 文字で示す）
+            if let message = engine.lastErrorMessage {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+            }
+
+            // Bluetooth は遅延が大きいので有線を勧める
+            if engine.isBluetoothOutput {
+                Label("有線ヘッドホン推奨（Bluetooth は約150msの遅延）。Bluetooth だと音が遅れて届くため、自分の声が話しにくく感じることがあります。",
+                      systemImage: "info.circle")
+                    .font(.footnote)
             }
         }
     }

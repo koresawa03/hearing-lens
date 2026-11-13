@@ -2,18 +2,20 @@
 
 最終更新: 2026-11-13
 
-1. **現在地**: フェーズ1「設計と土台」完了。運用ドキュメント一式と `HearingLens.swiftpm/` の骨組みを作成済み。xcodebuild（iPhone 17 シミュレータ）は BUILD SUCCEEDED、シミュレーターで S-01/S-02 の起動確認済み。PR #1 はドラフトで作成済み。
-2. **進行中の作業**: なし（PR #1 のマージ待ち）。音響処理の実体は未実装（`HearingAudioEngine` は TODO(F-01)）。
+1. **現在地**: フェーズ2-A「音響エンジンの土台と安全まわり」の実装が完了（ブランチ `feat/f01-audio-engine-foundation`、PR #2 のブランチから作成）。低遅延化（IO バッファ5ms・48kHz、実値をログ出力）、入力ソース別セッション、内蔵マイク固定・HFP 除外、EQ 4バンド固定、フェードアウト停止と即停止の使い分け、ルート変更の理由別処理を実装。xcodebuild は BUILD SUCCEEDED（自作コードの警告なし）。design.md 4・5章、ADR-0003、teach.md 第3・4章、detail.md、todo.md、update.md、aim.md も更新済み。
+2. **進行中の作業**: なし。未コミット（コミット・push・新しいドラフトPR作成・PR #2 のクローズはメインが行う）。
 3. **次にやること**:
-   - PR #1 をマージ
-   - `git checkout main && git pull origin main` の後 `feat/f01-audio-engine` ブランチを切り、F-01 / F-06 の音響エンジン実装へ（tasks/todo.md フェーズ2を上から）
-   - 実機（iPad の Swift Playgrounds / iPhone）での起動確認は今後
-4. **重要な決定事項**: ADR-0001（.swiftpm・外部依存と音声アセットなし）、ADR-0002（出力段にピークリミッター＋音量上限）。初回コミットのみ main に直接（空リポジトリのため）。以後は必ずブランチ。
+   - 変更をコミットして push、新しいドラフトPRを作り、PR #2 をクローズ
+   - 実機＋有線ヘッドホンで確認（update.md 2026-11-13 17:00 の「実機テスト手順」。低い端末音量から）。実際の ioBufferDuration / sampleRate をログで確認
+   - フェーズ2-B: 値のランプ、F-05 緩和の作り込み、聴感チューニング、リミッターしきい値、フィルタ傾斜（12dB/oct が弱いので多段化を検討）
+   - その後フェーズ3（F-02 日常モード・波形ビジュアライザー）。F-04 の RMS メーターと F-07 の話し声（AVAudioPlayerNode を sourceMixer に追加）も後続
+4. **重要な決定事項**: ADR-0001（.swiftpm・外部依存と音声アセットなし）、ADR-0002（リミッター＋音量上限）、ADR-0003（低遅延・入力ソース別セッション・内蔵マイク固定・HFP 除外）。EQ は `EQBand` の4バンド固定でつなぎ直さない。ユーザー操作の停止はフェードアウト、抜去・割り込み・構成変更は即停止。`.newDeviceAvailable` は自動で開始しない。ノイズは AVAudioSourceNode のまま。
 5. **ハマりポイント**:
-   - 聴覚過敏の +18dB は耳を傷める危険がある。リミッターと音量上限なしで実機テストしない
+   - 聴覚過敏の +18dB は耳を傷める危険。リミッターと音量上限なしで実機テストしない
    - Bluetooth は遅延が大きい（約150ms）。テストは有線ヘッドホン推奨
+   - シミュレーターにはヘッドホンがないので、音はテスト音源モードか実機で確認
+   - xcodebuild の destination は実在するシミュレーター名（例: `platform=iOS Simulator,name=iPhone 17`）
+   - OS は希望のバッファ時間・サンプルレートに丸めることがある。必ずログで実値を確認
+   - リミッターのしきい値は既定のまま（未調整）
    - SSC の提出要項で生成AI利用の申告欄があるか確認する
-   - .swiftpm は Playgrounds 形式なので Xcode のターゲット設定とは勝手が違う
-   - xcodebuild の destination は `generic/platform=iOS Simulator` ではなく、実在するシミュレーター名（例: `platform=iOS Simulator,name=iPhone 17`）を指定する
-   - シミュレーターにはヘッドホンがないので、音の確認はテスト音源モードか実機で行う
-6. **参照すべきドキュメント**: aim.md、docs/design.md（2章フィルタ値、4章オーディオ処理、6章要検討）、docs/adr/、tasks/todo.md、update.md（2026-11-13 15:50 のエントリ）
+6. **参照すべきドキュメント**: aim.md、docs/design.md（4章・5章）、docs/adr/0002・0003、tasks/todo.md フェーズ2-A・2-B、update.md（2026-11-13 17:00 のエントリ）、teach.md 第3・4章

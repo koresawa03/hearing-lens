@@ -62,6 +62,10 @@
 - 役割: 出力段にピークリミッター＋音量上限を置く決定（聴覚保護）
 - 参照元: aim.md、CLAUDE.md、docs/design.md、HearingLens.swiftpm/HearingAudioEngine.swift
 
+### docs/adr/0003-low-latency-and-input-routing.md
+- 役割: 低遅延化（IO バッファ約5ms・48kHz）、入力ソース別セッション（マイク `.playAndRecord` / テスト音源 `.playback`）、内蔵マイク固定と HFP 除外の決定
+- 参照元: docs/design.md 4章、teach.md 第3章、HearingLens.swiftpm/HearingAudioEngine.swift
+
 ## tasks/
 
 ### tasks/todo.md
@@ -105,23 +109,32 @@
 - 参照元: HearingAudioEngine.swift、ContentView.swift
 
 ### HearingLens.swiftpm/HearingAudioEngine.swift
-- 役割: F-01・F-04・F-06・F-07 の音響エンジンの土台。現状は状態管理とルート監視のみで、実音声処理は TODO(F-01)
+- 役割: F-01 フィルタ適用の音響エンジン、F-06 ヘッドホン検知・割り込み処理、聴覚保護（ADR-0002）、低遅延・入力ルーティング（ADR-0003）。F-04（音量メーター）と F-07 の話し声は未実装
+- ノードグラフ: `inputNode`（マイク時のみ接続）/ `noiseNode`（`AVAudioSourceNode`、コード生成ピンクノイズ）→ `sourceMixer` → `eq`（4バンド固定）→ `reverb` → `limiter`（ピークリミッター）→ `mainMixerNode` → 出力。ノードは init で attach、`start()` で connect。F-07 の話し声は後で `AVAudioPlayerNode` を sourceMixer に追加する
 - 主要要素:
   - `enum VolumeFeedback`（`.tooQuiet` / `.tooLoud` / `.good`）
+  - `private enum EQBand`（`highPass` / `lowPass` / `bandPass` / `peak`）: EQ バンドの固定の役割
+  - `private let audioLogger`: `os.Logger`（subsystem `com.koresawa.HearingLens`、category `audio`）
+  - `private final class PinkNoiseGenerator`（`@unchecked Sendable`）: Paul Kellet の簡易ピンクフィルタ + xorshift 乱数。render スレッド専用
+  - `private nonisolated func makeNoiseNode(format:)`: `AVAudioSourceNode` を MainActor 外で生成
   - `@Observable @MainActor final class HearingAudioEngine`
-    - 状態: `selectedProfile`、`mode`、`isRunning`（外部からは読み取り専用）、`isHeadphoneConnected`（同）、`useTestSource`、`isAdviceApplied`、`inputLevel`
-    - `quietThreshold`（0.15）/ `loudThreshold`（0.7）と `volumeFeedback`
-    - `currentFilter`: 選択中プロファイルのフィルタ。`isAdviceApplied` なら `relaxed`
-    - `canStart`: ヘッドホン接続またはテスト音源なら true
-    - `refreshRoute()`: 現在の出力ルートにヘッドホン類があるか確認して反映
-    - `init()` で `routeChangeNotification` を購読。ヘッドホンが外れたら（テスト音源を除き）`stop()`
-    - `start()` / `stop()` / `select(_:)`: 現状はフラグ更新のみ（実処理は TODO(F-01)）
-- 依存: HearingProfile.swift、AVFoundation、Observation
+    - 状態: `selectedProfile` / `isAdviceApplied` / `useTestSource`（didSet で `applyFilter`。`useTestSource` は稼働中に切り替わると `stopImmediately()`）、`mode`、`isRunning`・`isStopping`（フェードアウト中）・`isHeadphoneConnected`・`isBluetoothOutput`・`micPermissionDenied`（外部から読み取り専用）、`lastErrorMessage`、`inputLevel`（TODO(F-04)）
+    - 定数: `quietThreshold` / `loudThreshold`、`maxOutputVolume`（0.6）、フェードイン 0.5 秒・10 段、フェードアウト 0.15 秒・6 段、`preferredIOBufferDuration`（5ms）、`preferredSampleRate`（48kHz）など
+    - `currentFilter` / `canStart` / `volumeFeedback`
+    - `applyFilter(_:)`（private）: 各 EQ バンドの値を書き換え、未使用バンドは bypass。リバーブのプリセットと wet、ノイズ音量（`noiseNode.volume`）を設定。ノードのつなぎ直しなし。稼働中でも呼べる
+    - `refreshRoute()`: 出力ルートからヘッドホン有無（HFP は含めない）と Bluetooth 出力かを更新
+    - `handleRouteChange(reasonValue:)`: reason が `.oldDeviceUnavailable` でヘッドホンがなければ即停止。保険としてマイクモードでヘッドホンがなければ理由に関係なく即停止。`.newDeviceAvailable` は状態更新のみ
+    - `handleInterruption(typeValue:)`: 割り込み開始で `stopImmediately()`、終了しても自動再開しない
+    - `handleConfigurationChange()`: `.AVAudioEngineConfigurationChange` で稼働中なら `stopImmediately()`、自動再開なし
+    - `start() async`: マイク権限要求 → AVAudioSession（マイク時 `.playAndRecord` / `.allowBluetoothA2DP`、テスト音源時 `.playback`。サンプルレートとバッファを希望指定）→ 実際の値をログ → マイク時は内蔵マイクを `setPreferredInput`（無ければエラー）→ グラフ接続 → エンジン起動 → フェードイン。失敗は `lastErrorMessage` に日本語で入れる
+    - `stop()`: ユーザー操作の停止。約0.15秒フェードアウト後に `teardown`。`isStopping` で二重実行を防ぐ
+    - `select(_:)`、private: `stopImmediately`（フェードなしの即停止）、`connectGraph`、`startFadeIn`、`teardown`、`logAudioSession`、`deactivateSession`
+- 依存: HearingProfile.swift、AVFoundation、AudioToolbox、Observation、os
 - 参照元: ContentView.swift
 
 ### HearingLens.swiftpm/ContentView.swift
 - 役割: S-02 メイン画面。モード Picker、2x2 プロファイルグリッド、解説、会話モードのアドバイス、ビジュアライザーとメーターの場所取り、ヘッドホン状態・テスト音源・開始/停止（F-02〜F-07 の枠）
-- 主要要素: `ContentView`。`@State engine`（`HearingAudioEngine`）、`@AppStorage("hasSeenOnboarding")` と `@State showOnboarding`。`onAppear` で `showOnboarding = !hasSeenOnboarding` を設定し、`.sheet` で `OnboardingView` を表示（オンボーディングは ContentView から出す）
+- 主要要素: `ContentView`。`@State engine`（`HearingAudioEngine`）、`@AppStorage("hasSeenOnboarding")` と `@State showOnboarding`。`onAppear` で `showOnboarding = !hasSeenOnboarding` を設定し、`.sheet` で `OnboardingView` を表示（オンボーディングは ContentView から出す）。開始ボタンは `Task { await engine.start() }`、`engine.isStopping` の間は無効。`engine.micPermissionDenied` のとき説明と「設定を開く」ボタン（`UIApplication.openSettingsURLString`）、`engine.lastErrorMessage` のエラー表示、`engine.isBluetoothOutput` のとき「有線ヘッドホン推奨（Bluetooth は約150msの遅延）」の注意を表示
 - 依存: HearingProfile.swift、HearingAudioEngine.swift、OnboardingView.swift
 - 参照元: MyApp.swift
 
