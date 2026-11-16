@@ -74,8 +74,17 @@ F-02 と同じ処理に、話し方のアドバイス（見出し: Tips for talk
 ### F-05 対応術実践スイッチ
 - 「Practice the tips」トグルをONにすると、フィルタが緩和されクリアな音声に近づく
 - 配慮の有無で聞き取りやすさがどう変わるかを音で実感させる（ビフォー・アフター）
-- 緩和はフィルタ値を段階的に変えて音切れを避ける
-- 実装（`FilterParameters.relaxed`、実装済み）: ローパスのカットオフ ×2（上限 20kHz）、ハイパスのカットオフ ×½、バンドパス帯域幅 ×2、パラメトリックEQ のゲイン ×½、リバーブ wet ×½、ノイズ混合 ×½。完全にクリアにはしない（完全クリアは `FilterParameters.clear`）
+- 緩和はフィルタ値を**ランプ（0.3秒でなめらかに変化）**で動かして音切れ・プツッという音を避ける。ON/OFF の切り替えも、プロファイル切替と同じランプを通る（4章）
+- 実装（`RelaxFactors` と `FilterParameters.relaxed(by:)`）: 倍率は構造体 `RelaxFactors` にまとめ、調整パネルから変更できる。既定値は次のとおり。完全にクリアにはしない（完全クリアは `FilterParameters.clear`）
+
+| 項目 | `RelaxFactors` のプロパティ | 既定値 |
+|---|---|---|
+| ローパスのカットオフ | `lowPassMultiplier` | ×2.0（上限 `lowPassMax` = 20kHz） |
+| ハイパスのカットオフ | `highPassMultiplier` | ×0.5 |
+| バンドパス帯域幅 | `bandwidthMultiplier` | ×2.0 |
+| パラメトリックEQ のゲイン | `gainFactor` | ×0.5 |
+| リバーブ wet | `wetFactor` | ×0.5 |
+| ノイズ混合 | `noiseFactor` | ×0.5 |
 
 ### F-06 ハウリング防止
 - `AVAudioSession` のルートを監視し、ヘッドホン（有線 / Bluetooth / USB）接続時のみパススルーを有効にする
@@ -147,28 +156,61 @@ F-02 と同じ処理に、話し方のアドバイス（見出し: Tips for talk
 ### ノードグラフ
 ```
 [マイク入力 AVAudioInputNode] ─┐
-[環境ノイズ AVAudioSourceNode] ┼→ [sourceMixer] → [AVAudioUnitEQ(4バンド固定)] → [AVAudioUnitReverb] → [ピークリミッター] → [mainMixer] → 出力
+[環境ノイズ AVAudioSourceNode] ┼→ [sourceMixer] → [AVAudioUnitEQ(5バンド固定)] → [AVAudioUnitReverb] → [DynamicsProcessor] → [ピークリミッター] → [mainMixer] → 出力
 [話し声 AVAudioPlayerNode(F-07, 後で追加)] ┘
 ```
 - 入力は「マイク」か「テスト音源」のどちらか一方を使う（F-07）。テスト音源モードではマイクをつながない
 - 環境ノイズ（APD 用・テスト音源用）は `AVAudioSourceNode` で、コードが生成するピンクノイズ。音声アセットは不要で、無限に鳴らせる
 - F-07 の話し声は、後で `AVAudioPlayerNode` を sourceMixer に追加して流す（まだ未実装）
 - リバーブ: `loadFactoryPreset` で `.smallRoom` / `.mediumHall` を使う。不要なときは wetDryMix を 0
-- リミッター: `AVAudioUnitEffect` で `kAudioUnitSubType_PeakLimiter` を使う。ミキサーの出力音量にも上限を設ける（ADR-0002）
+- ダイナミクス＋リミッター: リバーブの後に `kAudioUnitSubType_DynamicsProcessor`（しきい値を調整できる）、その後に `kAudioUnitSubType_PeakLimiter`（最終の安全装置）を置く。どちらも `AVAudioUnitEffect` 経由。ミキサーの出力音量にも上限を設ける（ADR-0002、下の「ダイナミクスとリミッター」）
 - 開始時は音量 0 からフェードインする
 
-### EQ のバンド構成（固定）
-EQ は固定数（4）のバンドを最初に作り、プロファイルが使わないバンドは bypass にする。プロファイルを切り替えても**ノードをつなぎ直さない**（つなぎ直すと音が途切れるため）。各バンドの役割はコードの定数（`EQBand`）で固定する。
+### EQ のバンド構成（固定・5バンド）
+EQ は固定数（5）のバンドを最初に作る。プロファイルを切り替えても**ノードをつなぎ直さない**（つなぎ直すと音が途切れるため）。各バンドの役割は、コードの定数（`EQBand`）で「役割＋段番号」から決まる。
+
+LPF / HPF は1段だと 12dB/oct で効きが弱いので、**同じ値の2段を重ねて 24dB/oct** にする（段数は定数 `passFilterStages = 2`）。同じ役割の段には必ず同じ値を入れる。
 
 | バンド | 種類 | 使うプロファイル |
 |---|---|---|
-| band0 | ハイパス（HPF） | 低音難聴 |
-| band1 | ローパス（LPF） | 高音難聴 |
-| band2 | バンドパス | APD |
-| band3 | パラメトリック（ピークEQ） | 聴覚過敏 |
+| band0, band1 | ハイパス（HPF）×2段 | 低音難聴、APD（下限側） |
+| band2, band3 | ローパス（LPF）×2段 | 高音難聴、APD（上限側） |
+| band4 | パラメトリック（ピークEQ） | 聴覚過敏 |
 
-- フィルタ値の適用（`applyFilter`）は PR #2 で実装済み（フェーズ2-B の先取り）。プロファイル切替は稼働中でも各バンドのパラメーターを書き換えるだけで行う
-- フェーズ2-B で行うこと: 値のランプ（なめらかな変化）、F-05 緩和の作り込み、聴感チューニング
+- **全バンドを常に有効**にする（bypass は常に false）。使わないバンドは「効かない値」へランプする: HPF 20Hz / LPF 20kHz / ピーク 0dB（定数）。bypass を切り替えないので、切替時にもクリックが出ない。`filterType` は初期化時に一度だけ設定する
+- **APD のバンドパス**は専用バンドではなく、HPF＋LPF で作る。`FilterParameters.bandPass`（中心・帯域幅 oct）はデータとして持ち、エンジン内で次の式でカットオフへ変換する（1kHz・1.5oct のとき約 595Hz〜1.68kHz）:
+  - 下限（HPF）= 中心 ÷ 2^(幅/2)、上限（LPF）= 中心 × 2^(幅/2)
+- 各プロファイルが使うバンドは次のとおり
+  - 高音難聴: LPF のみ（HPF は効かない値）
+  - 低音難聴: HPF のみ（LPF は効かない値）
+  - APD: HPF＋LPF（バンドパス相当）
+  - 聴覚過敏: ピークのみ
+
+### 値のランプ（なめらかな変化）
+プロファイル切替・F-05 の ON/OFF・調整パネルの変更は、すべて `retarget()` を通って「目標値」を決め直す。値は一気に変えず、ランプで動かす。
+
+- 「実際の値」（`AppliedState`: HPF・LPF のカットオフ、ピークの周波数・ゲイン・幅、リバーブ wet、ノイズ、リバーブのプリセット）を持ち、目標値へ向かわせる
+- MainActor の Task で約 60Hz、合計 0.3 秒（定数 `rampDuration`）。毎フレーム、開始値→目標値を補間してノードへ書き込む
+- 周波数は**対数補間**（`f0 × (f1/f0)^t`）、それ以外は線形。時間の進み t には smoothstep（`3t² − 2t³`）をかけ、始まりと終わりをなめらかにする
+- ランプの途中で再び指定されたら、実行中のランプを cancel し、「いまの実際の値」から新しい目標へ向かい直す
+- エンジン起動前（`start()` の中）は、ランプなしで目標値を即時適用する
+- **リバーブのプリセット切替**（smallRoom ↔ mediumHall、なし を含む）は値の補間ができない。そこで ①前半 0.15 秒で wet を 0 へ下げる ②`loadFactoryPreset` の直後に wet を 0 に設定し直す（読込で wet が初期値に戻るため）③後半で目標の wet へ上げる、の順で切り替える
+- ノイズの量は `noiseNode.volume` で調整する（テスト音源モードでは最低音量を保つ）
+
+### ダイナミクスとリミッター
+- Apple の PeakLimiter にはしきい値のパラメータがない（0dBFS 固定）ため、前段に `DynamicsProcessor` を置き、そのしきい値を調整対象にする（ADR-0002 追記）。PeakLimiter は最終の安全装置として残す
+- `DynamicsProcessor` の設定: しきい値は `limiterThresholdDB`（出発点 -3dB、ほぼ素通し。調整範囲 -24〜0dB）、HeadRoom は小さめの定数でリミッターに近い動きにする、ExpansionRatio は 1（無効）、OverallGain は 0dB（増幅しない）
+- 出力上限: `absoluteMaxOutputVolume = 0.6`（ADR-0002 の上限。これより上げない）。ユーザー音量の上限 `outputCap` は 0.2〜0.6 で調整でき（既定 0.6）、音量スライダーの最大値とフェードインの到達値は `outputCap` に従う
+- ピークゲインの最大は +18dB（仕様の最大値）を超えない
+
+### 調整パネル（提出前に無効化）
+作者が実機で値を詰めるための "Tuning" パネル。ⓘ シートの一番下に `TuningConfig.isEnabled` のときだけ表示する。**提出前に `isEnabled = false` にする**（tasks/todo.md フェーズ7）。
+
+- 選択中プロファイルの使う項目だけを表示する（高音難聴: Low-pass cutoff / 低音難聴: High-pass cutoff・Reverb wet / APD: Band center・Band width・Reverb wet・Noise / 聴覚過敏: Peak frequency・Peak gain・Peak width）。稼働中の変更は即反映（ランプ経由）
+- 共通: Relax factors（6つ）、Limiter threshold、Output cap
+- 周波数のスライダーは対数スケール。範囲は `TuningConfig` の定数（聴覚保護のため Peak gain 0〜+18dB、Limiter threshold -24〜0dB、Output cap 0.2〜0.6）
+- 値は `HearingAudioEngine.tunedFilters` に持つ（保存しない）。"Copy values" で Swift コード形式の文字列をクリップボードへ入れ（全プロファイルの `FilterParameters(...)`、`RelaxFactors(...)`、threshold、outputCap）、"Reset" で出発点に戻す
+- 表示は英語・モノクロ。注記 "For tuning only — disabled before submission."
 
 ### 低遅延化
 - 自分の声が遅れて返ってくると話しにくくなる（遅延聴覚フィードバック、DAF）。会話モードの体験の核なので、遅延を減らす
