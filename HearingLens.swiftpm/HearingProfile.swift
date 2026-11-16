@@ -46,21 +46,21 @@ struct FilterParameters: Equatable {
     static let clear = FilterParameters()
 
     /// Relaxed version for the F-05 "Practice the tips" switch.
-    /// Simple approach: halve the effect amounts (gain, wet, noise) and move
+    /// Simple approach: scale the effect amounts (gain, wet, noise) down and move
     /// cutoff-style values in the direction that weakens them. It never becomes fully clear.
     /// Use `.clear` if it should ever switch to fully clear.
-    var relaxed: FilterParameters {
+    func relaxed(by factors: RelaxFactors) -> FilterParameters {
         var r = self
-        // Raise the low-pass (more highs pass): about double
-        r.lowPassCutoff = lowPassCutoff.map { min($0 * 2, 20_000) }
-        // Lower the high-pass (more lows pass): half
-        r.highPassCutoff = highPassCutoff.map { $0 / 2 }
+        // Raise the low-pass (more highs pass), capped at lowPassMax
+        r.lowPassCutoff = lowPassCutoff.map { min($0 * factors.lowPassMultiplier, factors.lowPassMax) }
+        // Lower the high-pass (more lows pass)
+        r.highPassCutoff = highPassCutoff.map { $0 * factors.highPassMultiplier }
         // Widen the band-pass
-        r.bandPass = bandPass.map { ($0.center, $0.bandwidth * 2) }
-        // Halve the boost
-        r.peakEQ = peakEQ.map { ($0.frequency, $0.gain / 2, $0.bandwidth) }
-        r.reverbWetDryMix = reverbWetDryMix / 2
-        r.noiseMix = noiseMix / 2
+        r.bandPass = bandPass.map { ($0.center, $0.bandwidth * factors.bandwidthMultiplier) }
+        // Reduce the boost
+        r.peakEQ = peakEQ.map { ($0.frequency, $0.gain * factors.gainFactor, $0.bandwidth) }
+        r.reverbWetDryMix = reverbWetDryMix * factors.wetFactor
+        r.noiseMix = noiseMix * factors.noiseFactor
         return r
     }
 
@@ -76,6 +76,24 @@ struct FilterParameters: Equatable {
             && lhs.reverbWetDryMix == rhs.reverbWetDryMix
             && lhs.noiseMix == rhs.noiseMix
     }
+}
+
+/// Multipliers for the F-05 relaxed filter. Defaults are the starting values (to be tuned by ear on a real device).
+struct RelaxFactors: Equatable {
+    /// Low-pass cutoff multiplier (more highs pass)
+    var lowPassMultiplier: Float = 2.0
+    /// High-pass cutoff multiplier (more lows pass)
+    var highPassMultiplier: Float = 0.5
+    /// Band-pass bandwidth multiplier
+    var bandwidthMultiplier: Float = 2.0
+    /// Peak gain factor
+    var gainFactor: Float = 0.5
+    /// Reverb wet factor
+    var wetFactor: Float = 0.5
+    /// Noise mix factor
+    var noiseFactor: Float = 0.5
+    /// Upper limit of the relaxed low-pass cutoff in Hz
+    var lowPassMax: Float = 20_000
 }
 
 /// The four hearing profiles

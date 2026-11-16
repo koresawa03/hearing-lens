@@ -268,7 +268,7 @@ struct ContentView: View {
             HStack(spacing: Theme.spaceM) {
                 Image(systemName: "speaker.fill")
                     .accessibilityHidden(true)
-                Slider(value: $engine.outputVolume, in: 0...HearingAudioEngine.maxOutputVolume)
+                Slider(value: $engine.outputVolume, in: 0...engine.outputCap)
                     .accessibilityLabel("Volume")
                 Image(systemName: "speaker.wave.3.fill")
                     .accessibilityHidden(true)

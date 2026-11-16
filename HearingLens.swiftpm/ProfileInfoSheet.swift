@@ -1,4 +1,4 @@
-// S-02 info sheet: profile details (opened with the info button), Test Sound (F-07), replay of onboarding (F-08)
+// S-02 info sheet: profile details (opened with the info button), Test Sound (F-07), replay of onboarding (F-08), tuning panel (TuningConfig)
 import SwiftUI
 
 struct ProfileInfoSheet: View {
@@ -60,6 +60,11 @@ struct ProfileInfoSheet: View {
                         .overlay(Capsule().stroke(Theme.line, lineWidth: Theme.thinLineWidth))
                 }
                 .buttonStyle(.plain)
+
+                if TuningConfig.isEnabled {
+                    Rectangle().fill(Theme.line).frame(height: Theme.thinLineWidth)
+                    TuningPanel(engine: engine)
+                }
 
                 Button {
                     dismiss()

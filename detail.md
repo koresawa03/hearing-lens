@@ -63,7 +63,7 @@
 - 参照元: CLAUDE.md（作業完了時に1行追記）、aim.md、tasks/todo.md フェーズ7
 
 ### docs/adr/0002-output-limiter-for-hearing-safety.md
-- 役割: 出力段にピークリミッター＋音量上限を置く決定（聴覚保護）
+- 役割: 出力段にピークリミッター＋音量上限を置く決定（聴覚保護）。2026-11-16 追記: しきい値を調整するための DynamicsProcessor を前段に置く決定
 - 参照元: aim.md、CLAUDE.md、docs/design.md、HearingLens.swiftpm/HearingAudioEngine.swift
 
 ### docs/adr/0003-low-latency-and-input-routing.md
@@ -107,34 +107,32 @@
   - `enum ExperienceMode`（`.daily` / `.conversation`）: `title`、`symbolName`
   - `struct FilterParameters`: `lowPassCutoff` / `highPassCutoff` / `bandPass` / `peakEQ`（nil は「処理しない」）、`reverbPreset`、`reverbWetDryMix`（0...100）、`noiseMix`（0...1）。タプルを含むため `==` は手書き
     - `static let clear`: 処理なし（原音）
-    - `var relaxed`: F-05 用の緩和版。LPF カットオフ ×2（上限 20kHz）、HPF カットオフ ×½、バンドパス帯域幅 ×2、EQ ゲイン / リバーブ wet / ノイズ混合 ×½。完全クリアではない
+    - `func relaxed(by:)`: F-05 用の緩和版。`RelaxFactors` の倍率で LPF / HPF のカットオフ、バンドパス帯域幅、EQ ゲイン、リバーブ wet、ノイズ混合を弱める。完全クリアではない
+  - `struct RelaxFactors`: F-05 の倍率（`lowPassMultiplier` 2.0 / `highPassMultiplier` 0.5 / `bandwidthMultiplier` 2.0 / `gainFactor` 0.5 / `wetFactor` 0.5 / `noiseFactor` 0.5 / `lowPassMax` 20000）。既定値は従来の緩和と同じ。調整パネルから変更できる
   - `enum HearingProfile`（High-Frequency Hearing Loss / Low-Frequency Hearing Loss / APD / Hyperacusis）: `title`（正式名。VoiceOver にも使う）、`tabTitle`（タブ用の短い名前）、`shortDescription`（メイン画面の一行説明）、`symbolName`、`mainTargets`、`description`、`conversationTips`（各3つ）、`filter`（未調整の出発値）。`tint` は削除済み（完全モノクロ化、ADR-0004）。文字列はすべて英語
 - 依存: SwiftUI、AVFoundation
-- 参照元: HearingAudioEngine.swift、ContentView.swift、ProfileInfoSheet.swift
+- 参照元: HearingAudioEngine.swift、ContentView.swift、ProfileInfoSheet.swift、TuningPanel.swift
 
 ### HearingLens.swiftpm/HearingAudioEngine.swift
-- 役割: F-01 フィルタ適用の音響エンジン、F-06 ヘッドホン検知・割り込み処理、聴覚保護（ADR-0002）、低遅延・入力ルーティング（ADR-0003）。F-04（音量メーター）と F-07 の話し声は未実装
-- ノードグラフ: `inputNode`（マイク時のみ接続）/ `noiseNode`（`AVAudioSourceNode`、コード生成ピンクノイズ）→ `sourceMixer` → `eq`（4バンド固定）→ `reverb` → `limiter`（ピークリミッター）→ `mainMixerNode` → 出力。ノードは init で attach、`start()` で connect。F-07 の話し声は後で `AVAudioPlayerNode` を sourceMixer に追加する
+- 役割: F-01 フィルタ適用（ランプ付き）の音響エンジン、F-05 緩和の適用、F-06 ヘッドホン検知・割り込み処理、聴覚保護（ADR-0002）、低遅延・入力ルーティング（ADR-0003）。F-04（音量メーター）と F-07 の話し声は未実装
+- ノードグラフ: `inputNode`（マイク時のみ接続）/ `noiseNode`（`AVAudioSourceNode`、コード生成ピンクノイズ）→ `sourceMixer` → `eq`（5バンド固定: HPF×2・LPF×2・ピーク）→ `reverb` → `dynamics`（DynamicsProcessor。しきい値を調整できる）→ `limiter`（ピークリミッター）→ `mainMixerNode` → 出力。ノードは init で attach、`start()` で connect
 - 主要要素:
   - `enum VolumeFeedback`（`.tooQuiet` / `.tooLoud` / `.good`）
-  - `private enum EQBand`（`highPass` / `lowPass` / `bandPass` / `peak`）: EQ バンドの固定の役割
-  - `private let audioLogger`: `os.Logger`（subsystem `com.koresawa.HearingLens`、category `audio`）
-  - `private final class PinkNoiseGenerator`（`@unchecked Sendable`）: Paul Kellet の簡易ピンクフィルタ + xorshift 乱数。render スレッド専用
-  - `private nonisolated func makeNoiseNode(format:)`: `AVAudioSourceNode` を MainActor 外で生成
+  - `private enum EQRole`（`highPass` / `lowPass` / `peak`）と `bandIndex(_:stage:)`: 役割＋段番号からバンド番号を返す
+  - `private struct AppliedState`: ノードに実際に書いている値（HPF・LPF のカットオフ、ピークの周波数・ゲイン・幅、リバーブ wet、ノイズ、読み込み済みのリバーブプリセット）
+  - `private let audioLogger`、`PinkNoiseGenerator`、`makeNoiseNode(format:)`（変更なし）
   - `@Observable @MainActor final class HearingAudioEngine`
-    - 状態: `outputVolume`（ユーザー音量。初期値 0.3 = 上限の半分。didSet で 0...`maxOutputVolume` に収め、稼働中でフェード中でなければ `mainMixerNode.outputVolume` に即反映。フェードインの到達値でもある）、`selectedProfile` / `isAdviceApplied` / `useTestSource`（didSet で `applyFilter`。`useTestSource` は稼働中に切り替わると `stopImmediately()`）、`mode`、`isRunning`・`isStopping`（フェードアウト中）・`isHeadphoneConnected`・`isBluetoothOutput`・`micPermissionDenied`（外部から読み取り専用）、`lastErrorMessage`、`inputLevel`（TODO(F-04)）
-    - 定数: `quietThreshold` / `loudThreshold`、`maxOutputVolume`（0.6）、フェードイン 0.5 秒・10 段、フェードアウト 0.15 秒・6 段、`preferredIOBufferDuration`（5ms）、`preferredSampleRate`（48kHz）など
-    - `currentFilter` / `canStart` / `volumeFeedback`
-    - `applyFilter(_:)`（private）: 各 EQ バンドの値を書き換え、未使用バンドは bypass。リバーブのプリセットと wet、ノイズ音量（`noiseNode.volume`）を設定。ノードのつなぎ直しなし。稼働中でも呼べる
-    - `refreshRoute()`: 出力ルートからヘッドホン有無（HFP は含めない）と Bluetooth 出力かを更新
-    - `handleRouteChange(reasonValue:)`: reason が `.oldDeviceUnavailable` でヘッドホンがなければ即停止。保険としてマイクモードでヘッドホンがなければ理由に関係なく即停止。`.newDeviceAvailable` は状態更新のみ
-    - `handleInterruption(typeValue:)`: 割り込み開始で `stopImmediately()`、終了しても自動再開しない
-    - `handleConfigurationChange()`: `.AVAudioEngineConfigurationChange` で稼働中なら `stopImmediately()`、自動再開なし
-    - `start() async`: マイク権限要求 → AVAudioSession（マイク時 `.playAndRecord` / `.allowBluetoothA2DP`、テスト音源時 `.playback`。サンプルレートとバッファを希望指定）→ 実際の値をログ → マイク時は内蔵マイクを `setPreferredInput`（無ければエラー）→ グラフ接続 → エンジン起動 → フェードイン。失敗は `lastErrorMessage` に英語で入れる
-    - `stop()`: ユーザー操作の停止。約0.15秒フェードアウト後に `teardown`。`isStopping` で二重実行を防ぐ
-    - `select(_:)`、private: `stopImmediately`（フェードなしの即停止）、`connectGraph`、`startFadeIn`、`teardown`、`logAudioSession`、`deactivateSession`
+    - 状態: `outputVolume`（0...`outputCap` に収める）、`selectedProfile` / `isAdviceApplied` / `useTestSource`（didSet で `retarget()`。`useTestSource` は稼働中に切り替わると `stopImmediately()`）、`mode`、`isRunning` 等、`lastErrorMessage`、`inputLevel`（TODO(F-04)）
+    - 調整用の状態: `tunedFilters`（プロファイルごとの `FilterParameters`。出発点は `profile.filter`）、`relaxFactors`、`limiterThresholdDB`（-24〜0、既定 -3）、`outputCap`（0.2〜`absoluteMaxOutputVolume`）
+    - 定数: `absoluteMaxOutputVolume`（0.6）、`minOutputCap`、`passFilterStages`（2）、`neutralHighPass` / `neutralLowPass` / `neutralPeakGain`、`maxPeakGain`（18）、`rampDuration`（0.3）、`rampFrameRate`（60）、`reverbSwitchSplit`、DynamicsProcessor の HeadRoom / ExpansionRatio / OverallGain、フェード・バッファ・サンプルレートなど
+    - `currentFilter`: `tunedFilters` から作り、F-05 が ON なら `relaxed(by: relaxFactors)`
+    - `makeTarget(from:)`: `FilterParameters` から目標の `AppliedState` を作る。未使用は効かない値。バンドパスは HPF＝中心÷2^(幅/2)、LPF＝中心×2^(幅/2) に変換
+    - `retarget()`: 実行中のランプを cancel し、目標を決め直す。停止中は即時適用、稼働中は MainActor の Task で約60Hz・0.3秒、周波数は対数補間・それ以外は線形、smoothstep でなめらかに。リバーブのプリセットが変わるときは wet を 0 へ→`loadFactoryPreset`→wet を目標へ
+    - `applyDynamicsSettings()`: `AudioUnitSetParameter` で Threshold / HeadRoom / ExpansionRatio / OverallGain を設定
+    - `updateTuned(_:_:)`、`resetTuning()`、`tuningSnapshotCode()`: 調整パネル用（値の編集・初期化・Swift コード形式の文字列化）
+    - `refreshRoute()` / `handleRouteChange` / `handleInterruption` / `handleConfigurationChange` / `start() async` / `stop()` / `select(_:)` と private の `stopImmediately` / `connectGraph` / `startFadeIn`（到達値は `outputCap` 以下）/ `teardown`（ランプを完了させる）/ `logAudioSession` / `deactivateSession`: 従来どおり
 - 依存: HearingProfile.swift、AVFoundation、AudioToolbox、Observation、os
-- 参照元: ContentView.swift、ProfileInfoSheet.swift
+- 参照元: ContentView.swift、ProfileInfoSheet.swift、TuningPanel.swift
 
 ### HearingLens.swiftpm/Theme.swift
 - 役割: 完全モノクロ UI（ADR-0004）の色・余白・サイズ・字間・アイコンのウェイトを一か所に集約する。他のファイルは色や余白の数値を直書きせず `Theme` を参照する
@@ -152,12 +150,12 @@
 
 ### HearingLens.swiftpm/ProfileInfoSheet.swift
 - 役割: S-02 の ⓘ ボタンで開くシート。選択中プロファイルの詳細、Test Sound、オンボーディング再表示
-- 主要要素: `struct ProfileInfoSheet`（`@Bindable engine`、`onShowIntroduction` クロージャ）。見出し「Common among」「How it sounds」「Tips for talking」、近似の注意、`Toggle("Test Sound")`（`engine.useTestSource`）と説明、「Show Introduction Again」「Done」。スクロール可、Dynamic Type 対応
-- 依存: HearingAudioEngine.swift、HearingProfile.swift、Theme.swift
+- 主要要素: `struct ProfileInfoSheet`（`@Bindable engine`、`onShowIntroduction` クロージャ）。見出し「Common among」「How it sounds」「Tips for talking」、近似の注意、`Toggle("Test Sound")`（`engine.useTestSource`）と説明、「Show Introduction Again」、`TuningConfig.isEnabled` のときだけ `TuningPanel`、「Done」。スクロール可、Dynamic Type 対応
+- 依存: HearingAudioEngine.swift、HearingProfile.swift、Theme.swift、TuningConfig.swift、TuningPanel.swift
 - 参照元: ContentView.swift（`.sheet`）
 
 ### HearingLens.swiftpm/ContentView.swift
-- 役割: S-02 メイン画面（中央ビジュアル型・完全モノクロ・英語）。上から: 上部バー（モード文字切替 Everyday / Conversation と ⓘ）、`HeroSphereView`、プロファイル名＋`shortDescription`、（会話モードのみ）アドバイス1つ（タップで次へ）＋「Practice the tips」、プロファイル文字タブ、状態の1行、音量スライダー＋丸い主ボタン
+- 役割: S-02 メイン画面（中央ビジュアル型・完全モノクロ・英語）。上から: 上部バー（モード文字切替 Everyday / Conversation と ⓘ）、`HeroSphereView`、プロファイル名＋`shortDescription`、（会話モードのみ）アドバイス1つ（タップで次へ）＋「Practice the tips」、プロファイル文字タブ、状態の1行、音量スライダー（最大値は `engine.outputCap`）＋丸い主ボタン
 - 主要要素: `ContentView`。`@State engine`、`@AppStorage("hasSeenOnboarding")`、`showOnboarding` / `showInfo` / `pendingIntroduction`（ⓘ シートが閉じてからオンボーディングを出し、シートが同時に2枚出ないようにする）、`tipIndex`（プロファイル変更で 0 に戻す）。選択状態は semibold＋前景100%＋下の点（`selectableText`）。状態の1行は優先順位: エラー → マイク拒否（「Open Settings」ボタン）→ Bluetooth → ヘッドホンなし案内 → 接続中 / Test Sound on。主ボタンは開始時 `Task { await engine.start() }`、`!canStart` または `isStopping` で無効化（塗りをやめ、前景の輪郭線＋補足色のアイコン）。プロファイル文字タブは右端を mask でフェード。ルートに `.tint(Theme.foreground)`、iPad では `Theme.maxContentWidth` で幅を制限。全体は `GeometryReader`＋縦 `ScrollView`（`minHeight` = 画面高、`.basedOnSize`）で、最大 Dynamic Type でも切れずにスクロールできる。アクセシビリティサイズでは中央ビジュアルを固定高（`Theme.heroAccessibilityHeight`）にし、主ボタンと状態行アイコンは `@ScaledMetric` で拡大（主ボタンは上限 1.4 倍）
 - 依存: HearingProfile.swift、HearingAudioEngine.swift、OnboardingView.swift、ProfileInfoSheet.swift、HeroSphereView.swift、Theme.swift
 - 参照元: MyApp.swift
@@ -167,3 +165,16 @@
 - 主要要素: `OnboardingView`（`@AppStorage("hasSeenOnboarding")`、`@Environment(\.dismiss)`）
 - 依存: SwiftUI、Theme.swift
 - 参照元: ContentView.swift（`.sheet`）
+
+### HearingLens.swiftpm/TuningConfig.swift
+- 役割: S-02 調整パネルの有効/無効（`isEnabled`。**提出前に false にする**）と、スライダー範囲の定数一式（聴覚保護のため Peak gain 0〜+18dB、Limiter threshold -24〜0dB、Output cap 0.2〜0.6）
+- 主要要素: `enum TuningConfig`（`isEnabled`、`lowPassCutoffRange` / `highPassCutoffRange` / `bandCenterRange` / `peakFrequencyRange`（対数スライダー）、`bandWidthRange` / `peakWidthRange` / `peakGainRange`、`reverbWetRange` / `noiseRange`、`relax*Range`、`limiterThresholdRange` / `outputCapRange`）
+- 依存: Foundation
+- 参照元: ProfileInfoSheet.swift、TuningPanel.swift
+
+### HearingLens.swiftpm/TuningPanel.swift
+- 役割: S-02 ⓘ シート下部の "Tuning" パネル。実機で聞きながら値を詰める（英語・モノクロ・Dynamic Type・VoiceOver ラベルに値つき）
+- 主要要素: `struct TuningPanel`（`@Bindable engine`）。選択中プロファイルの使う項目だけを表示（高音難聴: Low-pass cutoff / 低音難聴: High-pass cutoff・Reverb wet / APD: Band center・Band width・Reverb wet・Noise / 聴覚過敏: Peak frequency・Peak gain・Peak width）、Relax factors（6つ）、Limiter threshold、Output cap。周波数は対数スライダー。"Copy values"（`UIPasteboard` に `tuningSnapshotCode()` を入れ、2秒 "Copied" と表示）と "Reset"
+- 依存: HearingAudioEngine.swift、HearingProfile.swift、TuningConfig.swift、Theme.swift、UIKit
+- 参照元: ProfileInfoSheet.swift
+

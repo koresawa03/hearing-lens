@@ -1,5 +1,37 @@
 # update.md — 進捗ログ（追記型・新しいものが上）
 
+## 2026-11-16 10:00 — フェーズ2-B: フィルタの作り込み（ランプ・2段フィルタ・F-05・調整パネル）
+
+### 立案
+- 依頼: フィルタ値の切り替えをなめらかにし（ランプ）、LPF / HPF を2段（24dB/oct）にして効きを強くし、F-05 緩和を作り込み、作者が実機で値を詰める調整パネルを作る。PR #6 はマージ済み。
+- ユーザー決定（2つ）:
+  1. リミッターのしきい値: Apple の PeakLimiter にはしきい値パラメータがないため、前段に `DynamicsProcessor` を置いてそのしきい値を調整対象にする。PeakLimiter は最終の安全装置として残す（ADR-0002 に追記）。
+  2. APD のバンドパス: 専用のバンドパスではなく HPF＋LPF で作る。全バンドを常に有効にし、使わないバンドは「効かない値」（HPF 20Hz / LPF 20kHz / ピーク 0dB）へランプする。
+- 計画（要約）:
+  - docs 先行: design.md 2章 F-05 と 4章（5バンド構成・ランプ・ダイナミクス・調整パネル）、ADR-0002 追記
+  - EQ は 5 バンド（HPF×2・LPF×2・ピーク）。値のランプは MainActor の Task（約60Hz・0.3秒、周波数は対数補間、smoothstep）。途中で再指定されたら「いまの値」から向かい直す
+  - リバーブのプリセット切替は wet を 0 に下げてから `loadFactoryPreset`、その後 wet を上げる
+  - `RelaxFactors`（HearingProfile.swift）、DynamicsProcessor、`outputCap`（0.2〜0.6、絶対上限 0.6）
+  - `TuningConfig.swift` / `TuningPanel.swift`（ⓘ シート下部。提出前に `isEnabled = false`）
+- 影響範囲: HearingAudioEngine.swift、HearingProfile.swift、ProfileInfoSheet.swift、ContentView.swift、TuningConfig.swift（新規）、TuningPanel.swift（新規）、docs/design.md、docs/adr/0002、teach.md 第3章、detail.md、tasks/todo.md、docs/ai-usage-log.md。
+- ブランチ: feat/f01-filter-tuning
+
+### 進捗
+- docs/design.md（2章 F-05、4章のバンド構成・ランプ・ダイナミクス・調整パネル）と ADR-0002 の追記を先に更新。
+- 実装: EQ を5バンド化（HPF×2・LPF×2・ピーク、bypass なし）、`AppliedState` と `retarget()` によるランプ、`RelaxFactors`、DynamicsProcessor（前段）、`outputCap`、`TuningConfig.swift` / `TuningPanel.swift`（新規）。
+- DynamicsProcessor のパラメーター ID: `kDynamicsProcessorParam_Threshold` / `_HeadRoom` / `_ExpansionRatio` / `_OverallGain`（make-up は 0dB）。
+- teach.md 第3章に解説を追加、detail.md / tasks/todo.md / docs/ai-usage-log.md を更新。
+- xcodebuild（iPhone 17）BUILD SUCCEEDED（`TuningConfig.isEnabled` が true / false の両方）、日本語 grep 0件。
+- 残課題: 実機確認（下記）、聴感チューニング、提出前に `isEnabled = false`。
+
+#### 実機テスト手順（ヘッドホンをつけたまま行う）
+端末の音量は最小から始め、少しずつ上げる。Peak gain を上げるときも少しずつ。
+1. プロファイルを素早く何度も切り替えても、プツッという音が鳴らないか。
+2. F-05（Practice the tips）の ON / OFF が、なめらかに変わるか。
+3. 低音難聴 ↔ APD を切り替えたとき、リバーブが不自然に途切れず、自然に切り替わるか。
+4. LPF・HPF を2段にして、1段のときより違いがはっきり分かるか。
+5. ⓘ の調整パネルで値を変えて、音に反映されるか。"Copy values" を押し、メモなどに貼って内容を確認できるか。
+
 ## 2026-11-13 19:00 — 中央ビジュアル「球体＋水面の波紋」と見た目の小修正
 
 ### 立案
