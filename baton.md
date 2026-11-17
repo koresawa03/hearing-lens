@@ -2,7 +2,10 @@
 
 最終更新: 2026-11-17
 
-1. **現在地**:
+0. **このセッションの更新（2026-11-17 14:40）**:
+   - 現在地: PR #10（`fix/bluetooth-start-stop`）。Bluetooth で開始直後に止まる不具合の修正を実機（iPad、Bluetooth A2DP）で確認済み。約6分止まらず、ヘッドホンを外すと `stop reason=headphonesRemoved` で即停止。
+   - 次にやること: ①PR #10 をマージ ②HearingAudioEngine が2つ生成されている問題の調査（ルート変更ログが毎回2行。ContentView の `@State private var engine = HearingAudioEngine()` の初期化式が View 再生成のたびに評価されている疑い。tasks/todo.md に登録済み）③その後フェーズ3（F-02 日常モード）。
+1. **現在地（それ以前）**:
    - スイッチ修正は fix/dark-mode-toggle の PR（base feat/f01-filter-tuning）。
    - フェーズ2-B「フィルタの作り込み」実装完了 → ドラフト PR #7（ブランチ `feat/f01-filter-tuning`、base main）。内容:
      - 値のランプ0.3秒（周波数は対数補間・smoothstep・途中から向かい直し）
@@ -29,6 +32,8 @@
    - 古いリモートブランチ origin/feat/f01-audio-engine は残すとユーザーが決定済み（もう聞かない）
    - 提出前に TuningConfig.isEnabled を false にする。
 5. **ハマりポイント**:
+   - 実機ログは `DEVICECTL_CHILD_OS_ACTIVITY_DT_MODE=enable xcrun devicectl device process launch --console --terminate-existing --device <id> com.koresawa.HearingLens` で取れるが、出力が数分遅れてまとめて届くことがある
+   - 実機ビルドは `xcodebuild ... -destination 'platform=iOS,id=00008112-000624D11A2A201E' -allowProvisioningUpdates DEVELOPMENT_TEAM=MY48Y23S2K`、インストールは `xcrun devicectl device install app --device 1BDCD3A6-22C6-5003-AE70-4050D7AC854F <app>`
    - 聴覚過敏の +16〜18dB は耳を傷める危険。実機は端末音量最小から。Peak gain は少しずつ
    - シミュレーターでスイッチを押すときは長めのタップ（0.15秒程度）でないと反応しないことがある
    - simctl のスクリーンショットは、操作直後だと1つ前の画面のことがある。1〜2秒待つ

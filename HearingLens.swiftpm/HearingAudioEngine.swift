@@ -13,10 +13,15 @@
 // - Values are not jumped: profile switches, the F-05 toggle and tuning changes all go through retarget(),
 //   which ramps the applied values to the new target over 0.3 s (log interpolation for frequencies, smoothstep easing).
 // - Low latency (ADR-0003): shrink the IO buffer to about 5 ms to reduce the delay before your own voice comes back.
+//   For Bluetooth output the preference is relaxed to about 20 ms (Bluetooth's own delay dominates; avoids OS-side reconfiguration).
 // - Per-source audio session (ADR-0003): microphone uses .playAndRecord + A2DP, test sound uses .playback.
 //   Input is pinned to the built-in microphone; the call-oriented HFP is not used.
 // - Hearing protection (ADR-0002): dynamics processor + limiter + output volume cap + fade-in from 0.
-//   A user-initiated stop uses a short fade-out; unplugging headphones, interruptions and configuration changes stop immediately.
+//   A user-initiated stop uses a short fade-out; unplugging headphones and interruptions stop immediately.
+// - Engine configuration change: if headphones are still connected (or test sound), rebuild the graph and resume from 0 with a fade-in
+//   (limited to maxRestartsInWindow rebuilds per restartWindow); otherwise stop immediately.
+// - Every stop path goes through performStop(reason:trigger:), which logs "stop reason=... trigger=... outputs=... inputs=..." (category "audio").
+//   Received route changes, interruptions and configuration changes are also logged even when nothing stops.
 import AVFoundation
 import AudioToolbox
 import Observation
@@ -111,6 +116,33 @@ private struct AppliedState: Equatable {
 /// Debug log. In the Xcode console, look at category "audio"
 private let audioLogger = Logger(subsystem: "com.koresawa.HearingLens", category: "audio")
 
+/// Why the engine stopped. Written to the log on every stop so the cause can be traced on a real device
+private enum StopReason: String {
+    case user                          // the user pressed stop (or switched the test source)
+    case headphonesRemoved             // route change: old device unavailable and no headphones left
+    case noHeadphonesAfterRouteChange  // microphone mode with no headphones after any route change
+    case interruption                  // call, Siri, etc.
+    case configurationChange           // engine configuration change while no headphones are connected
+    case startFailure                  // start or rebuild failed
+    case restartLimit                  // configuration changes kept coming (too many rebuilds)
+}
+
+/// Readable name of a route change reason (for logs)
+private func routeChangeReasonName(_ reason: AVAudioSession.RouteChangeReason?) -> String {
+    guard let reason else { return "missing" }
+    switch reason {
+    case .unknown: return "unknown"
+    case .newDeviceAvailable: return "newDeviceAvailable"
+    case .oldDeviceUnavailable: return "oldDeviceUnavailable"
+    case .categoryChange: return "categoryChange"
+    case .override: return "override"
+    case .wakeFromSleep: return "wakeFromSleep"
+    case .noSuitableRouteForCategory: return "noSuitableRouteForCategory"
+    case .routeConfigurationChange: return "routeConfigurationChange"
+    @unknown default: return "other(\(reason.rawValue))"
+    }
+}
+
 @Observable
 @MainActor
 final class HearingAudioEngine {
@@ -146,7 +178,7 @@ final class HearingAudioEngine {
             retarget()
             // Stop if this changes while running so the session category never disagrees with the mode (restart is a user action)
             if isRunning && useTestSource != oldValue {
-                stopImmediately()
+                performStop(reason: .user, trigger: "test source switched")
             }
         }
     }
@@ -232,6 +264,13 @@ final class HearingAudioEngine {
     /// AVAudioSession IO buffer duration (seconds). Smaller means less delay (about 5 ms).
     /// Hearing your own voice come back late makes speaking hard (delayed auditory feedback). Too small causes dropouts, so use 5 ms (ADR-0003)
     private static let preferredIOBufferDuration: TimeInterval = 0.005
+    /// IO buffer duration (seconds) preferred for Bluetooth output: about 20 ms.
+    /// Small compared with Bluetooth's own 150-250 ms latency, and a 5 ms request can make the OS reconfigure the hardware (ADR-0003 addendum)
+    private static let preferredIOBufferDurationBluetooth: TimeInterval = 0.02
+    /// Most engine rebuilds allowed inside `restartWindow`. One more notification stops with an error
+    private static let maxRestartsInWindow = 3
+    /// Window (seconds) for counting rebuilds
+    private static let restartWindow: TimeInterval = 2
     /// Preferred sample rate (Hz). 48 kHz is the standard value for iPhone's built-in microphone and speaker
     private static let preferredSampleRate: Double = 48_000
     /// Minimum ambient noise volume in test sound mode. A provisional "sound is playing" check until the F-07 voice loop exists
@@ -308,6 +347,10 @@ final class HearingAudioEngine {
     /// Whether the microphone input node is currently connected (not connected in test sound mode)
     @ObservationIgnored private var isInputConnected = false
     @ObservationIgnored private var fadeTask: Task<Void, Never>?
+    /// True while start() is in progress (including the wait for the permission dialog). Notifications received then are only logged
+    @ObservationIgnored private var isStarting = false
+    /// Times of recent engine rebuilds (for the restart limit)
+    @ObservationIgnored private var restartDates: [Date] = []
     /// Values currently written to the nodes (the ramp's starting point)
     @ObservationIgnored private var applied = AppliedState(
         hpCutoff: HearingAudioEngine.neutralHighPass,
@@ -650,40 +693,99 @@ final class HearingAudioEngine {
 
     private func handleRouteChange(reasonValue: UInt?) {
         refreshRoute()
-        guard isRunning else { return }
         let reason = reasonValue.flatMap { AVAudioSession.RouteChangeReason(rawValue: $0) }
-        // Headphones removed: stop immediately without fading, to prevent feedback
+        let reasonName = routeChangeReasonName(reason)
+        let (outputs, inputs) = routeDescription()
+        audioLogger.info("received routeChange reason=\(reasonName, privacy: .public) running=\(self.isRunning, privacy: .public) starting=\(self.isStarting, privacy: .public) headphones=\(self.isHeadphoneConnected, privacy: .public) outputs=\(outputs, privacy: .public) inputs=\(inputs, privacy: .public)")
+        // Not running, or start() is waiting at the permission dialog: only record it
+        guard isRunning, !isStarting else { return }
+        // Stop condition 1. Headphones removed: stop immediately without fading, to prevent feedback
         if reason == .oldDeviceUnavailable && !isHeadphoneConnected {
-            stopImmediately()
+            performStop(reason: .headphonesRemoved, trigger: "routeChange:\(reasonName)")
             return
         }
-        // Safety net: whatever the reason, stop if in microphone mode without headphones (test sound is exempt)
+        // Stop condition 2 (safety net): whatever the reason, stop if in microphone mode without headphones (test sound is exempt).
+        // isHeadphoneConnected comes from the refreshRoute() above (the route as of now).
         // Do nothing for .newDeviceAvailable (connected). Never start automatically; wait for the user
         if !useTestSource && !isHeadphoneConnected {
-            stopImmediately()
+            performStop(reason: .noHeadphonesAfterRouteChange, trigger: "routeChange:\(reasonName)")
         }
     }
 
     // MARK: Interruptions (calls, Siri, etc.)
     private func handleInterruption(typeValue: UInt?) {
         guard let typeValue, let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+        let typeName = type == .began ? "began" : "ended"
+        audioLogger.info("received interruption type=\(typeName, privacy: .public) running=\(self.isRunning, privacy: .public)")
         // Stop immediately when it begins. When it ends, do not resume automatically (to avoid sudden sound); wait for the user
-        if type == .began {
-            stopImmediately()
+        if type == .began && isRunning {
+            performStop(reason: .interruption, trigger: "interruption:began")
         }
     }
 
     // MARK: Engine configuration change
+    /// The engine stopped itself because the hardware format changed (common right after the session is set up with Bluetooth).
+    /// With headphones still connected (or test sound) we rebuild and resume from 0; otherwise we stop.
     private func handleConfigurationChange() {
-        // No automatic restart (to avoid sudden sound). Just reflect the stopped state in the UI
-        if isRunning {
-            stopImmediately()
+        let engineRunning = engine.isRunning
+        guard isRunning, !isStarting, !isStopping else {
+            audioLogger.info("received configurationChange engineRunning=\(engineRunning, privacy: .public) running=\(self.isRunning, privacy: .public) starting=\(self.isStarting, privacy: .public) action=ignored(not active)")
+            return
         }
+        guard !engineRunning else {
+            audioLogger.info("received configurationChange engineRunning=true action=ignored(engine still running)")
+            return
+        }
+        refreshRoute()
+        guard useTestSource || isHeadphoneConnected else {
+            audioLogger.info("received configurationChange engineRunning=false action=stop(no headphones)")
+            performStop(reason: .configurationChange, trigger: "configurationChange")
+            return
+        }
+
+        // Restart limit: too many rebuilds in a short time means something keeps changing. Give up with an error
+        let now = Date()
+        restartDates.removeAll { now.timeIntervalSince($0) > Self.restartWindow }
+        guard restartDates.count < Self.maxRestartsInWindow else {
+            audioLogger.info("received configurationChange engineRunning=false action=stop(restart limit)")
+            lastErrorMessage = "Audio output keeps changing. Please try again."
+            performStop(reason: .restartLimit, trigger: "configurationChange")
+            return
+        }
+        restartDates.append(now)
+
+        audioLogger.info("received configurationChange engineRunning=false action=rebuild(\(self.restartDates.count, privacy: .public)/\(Self.maxRestartsInWindow, privacy: .public))")
+        do {
+            try rebuildEngine()
+        } catch {
+            lastErrorMessage = "Couldn't start audio. Check your headphones and try again."
+            performStop(reason: .startFailure, trigger: "rebuild:\(error.localizedDescription)")
+        }
+    }
+
+    /// Reconnects the graph and restarts the engine after a configuration change, fading in from 0.
+    /// Does not touch the AVAudioSession category or activation (avoids triggering more changes).
+    private func rebuildEngine() throws {
+        guard try connectGraph(useMic: !useTestSource) else {
+            lastErrorMessage = "Couldn't access microphone input."
+            performStop(reason: .startFailure, trigger: "rebuild:no microphone input")
+            return
+        }
+        // Apply the target values at once (no ramp), then restart silent and fade in
+        rampTask?.cancel()
+        rampTask = nil
+        applyImmediately(makeTarget(from: currentFilter))
+        engine.mainMixerNode.outputVolume = 0
+        try engine.start()
+        startFadeIn()
     }
 
     // MARK: Actions
     func start() async {
-        guard canStart, !isRunning, !isStopping else { return }
+        guard canStart, !isRunning, !isStopping, !isStarting else { return }
+        isStarting = true
+        defer { isStarting = false }
+        restartDates.removeAll()
         lastErrorMessage = nil
         micPermissionDenied = false
 
@@ -709,9 +811,12 @@ final class HearingAudioEngine {
                 // so use .playback to play through the built-in speaker (for reviewers without headphones)
                 try session.setCategory(.playback, mode: .default, options: [])
             }
+            // The category decides the output route, so check whether it is Bluetooth before choosing the buffer
+            refreshRoute()
+            let bufferDuration = isBluetoothOutput ? Self.preferredIOBufferDurationBluetooth : Self.preferredIOBufferDuration
             // The OS may not honor these, so pass them as preferences and check the actual values in the log
             try session.setPreferredSampleRate(Self.preferredSampleRate)
-            try session.setPreferredIOBufferDuration(Self.preferredIOBufferDuration)
+            try session.setPreferredIOBufferDuration(bufferDuration)
             try session.setActive(true)
             logAudioSession(session)
 
@@ -719,7 +824,7 @@ final class HearingAudioEngine {
                 // Pin input to the built-in microphone. Left to the OS, it could switch to a Bluetooth microphone (ADR-0003)
                 guard let builtInMic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) else {
                     lastErrorMessage = "Built-in microphone not found."
-                    stopImmediately()
+                    performStop(reason: .startFailure, trigger: "start:no built-in microphone")
                     return
                 }
                 try session.setPreferredInput(builtInMic)
@@ -746,7 +851,7 @@ final class HearingAudioEngine {
             startFadeIn()
         } catch {
             lastErrorMessage = "Couldn't start audio. Check your headphones and try again."
-            stopImmediately()
+            performStop(reason: .startFailure, trigger: "start:\(error.localizedDescription)")
         }
     }
 
@@ -769,13 +874,24 @@ final class HearingAudioEngine {
             }
             // If it switched to an immediate stop or similar midway, do nothing
             if Task.isCancelled { return }
-            self?.teardown()
+            self?.performStop(reason: .user, trigger: "stop button")
         }
     }
 
-    /// Immediate stop without fading. Used when stopping fast matters for safety, such as headphone removal, interruptions and configuration changes
-    private func stopImmediately() {
+    /// The single place every stop goes through: logs the reason, then tears down without fading.
+    /// (A user stop fades out first in stop(), then arrives here.)
+    private func performStop(reason: StopReason, trigger: String) {
+        let (outputs, inputs) = routeDescription()
+        audioLogger.info("stop reason=\(reason.rawValue, privacy: .public) trigger=\(trigger, privacy: .public) outputs=\(outputs, privacy: .public) inputs=\(inputs, privacy: .public)")
         teardown()
+    }
+
+    /// Output and input ports of the current route as "type:name,..." (for logs)
+    private func routeDescription() -> (outputs: String, inputs: String) {
+        let route = AVAudioSession.sharedInstance().currentRoute
+        let outputs = route.outputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
+        let inputs = route.inputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
+        return (outputs, inputs)
     }
 
     func select(_ profile: HearingProfile) {
