@@ -2,7 +2,10 @@
 
 最終更新: 2026-11-17
 
-1. **現在地**:
+0. **このセッションの更新（2026-11-17 14:00）**:
+   - 現在地: `fix/bluetooth-start-stop`（main から）の PR。Bluetooth で開始直後に止まる不具合の修正を実装済み（停止理由ログ・構成変更時の組み直し・Bluetooth 時のバッファ約20ms）。
+   - 次: 実機ログ待ち（update.md 2026-11-17 14:00 エントリの手順）。原因がルート変更側だった場合は、ログの `received routeChange` / `stop reason=...` を見て即停止の条件を詰め直す。
+1. **現在地（それ以前）**:
    - スイッチ修正は fix/dark-mode-toggle の PR（base feat/f01-filter-tuning）。
    - フェーズ2-B「フィルタの作り込み」実装完了 → ドラフト PR #7（ブランチ `feat/f01-filter-tuning`、base main）。内容:
      - 値のランプ0.3秒（周波数は対数補間・smoothstep・途中から向かい直し）

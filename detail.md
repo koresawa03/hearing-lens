@@ -122,7 +122,7 @@
   - `private struct AppliedState`: ノードに実際に書いている値（HPF・LPF のカットオフ、ピークの周波数・ゲイン・幅、リバーブ wet、ノイズ、読み込み済みのリバーブプリセット）
   - `private let audioLogger`、`PinkNoiseGenerator`、`makeNoiseNode(format:)`（変更なし）
   - `@Observable @MainActor final class HearingAudioEngine`
-    - 状態: `outputVolume`（0...`outputCap` に収める）、`selectedProfile` / `isAdviceApplied` / `useTestSource`（didSet で `retarget()`。`useTestSource` は稼働中に切り替わると `stopImmediately()`）、`mode`、`isRunning` 等、`lastErrorMessage`、`inputLevel`（TODO(F-04)）
+    - 状態: `outputVolume`（0...`outputCap` に収める）、`selectedProfile` / `isAdviceApplied` / `useTestSource`（didSet で `retarget()`。`useTestSource` は稼働中に切り替わると `performStop(reason: .user, ...)`）、`mode`、`isRunning` 等、`lastErrorMessage`、`inputLevel`（TODO(F-04)）
     - 調整用の状態: `tunedFilters`（プロファイルごとの `FilterParameters`。出発点は `profile.filter`）、`relaxFactors`、`limiterThresholdDB`（-24〜0、既定 -3）、`outputCap`（0.2〜`absoluteMaxOutputVolume`）
     - 定数: `absoluteMaxOutputVolume`（0.6）、`minOutputCap`、`passFilterStages`（2）、`neutralHighPass` / `neutralLowPass` / `neutralPeakGain`、`maxPeakGain`（18）、`rampDuration`（0.3）、`rampFrameRate`（60）、`reverbSwitchSplit`、DynamicsProcessor の HeadRoom / ExpansionRatio / OverallGain、フェード・バッファ・サンプルレートなど
     - `currentFilter`: `tunedFilters` から作り、F-05 が ON なら `relaxed(by: relaxFactors)`
@@ -130,7 +130,13 @@
     - `retarget()`: 実行中のランプを cancel し、目標を決め直す。停止中は即時適用、稼働中は MainActor の Task で約60Hz・0.3秒、周波数は対数補間・それ以外は線形、smoothstep でなめらかに。リバーブのプリセットが変わるときは wet を 0 へ→`loadFactoryPreset`→wet を目標へ
     - `applyDynamicsSettings()`: `AudioUnitSetParameter` で Threshold / HeadRoom / ExpansionRatio / OverallGain を設定
     - `updateTuned(_:_:)`、`resetTuning()`、`tuningSnapshotCode()`: 調整パネル用（値の編集・初期化・Swift コード形式の文字列化）
-    - `refreshRoute()` / `handleRouteChange` / `handleInterruption` / `handleConfigurationChange` / `start() async` / `stop()` / `select(_:)` と private の `stopImmediately` / `connectGraph` / `startFadeIn`（到達値は `outputCap` 以下）/ `teardown`（ランプを完了させる）/ `logAudioSession` / `deactivateSession`: 従来どおり
+    - `private enum StopReason`（user / headphonesRemoved / noHeadphonesAfterRouteChange / interruption / configurationChange / startFailure / restartLimit）と `routeChangeReasonName(_:)`: 停止理由と、ルート変更の理由名（ログ用）
+    - `performStop(reason:trigger:)`: すべての停止が通る唯一の入口。`stop reason=... trigger=... outputs=... inputs=...` を1行ログに出してから `teardown`。`routeDescription()` はログ用に出入力ポートを「種別:名前」で返す
+    - `handleRouteChange`: 受信を必ずログ。即停止は「ヘッドホンが外れた」「マイクモードでヘッドホンなし」の2条件のみ。`handleInterruption`: 受信をログし、開始なら即停止
+    - `handleConfigurationChange`: 受信をログ。エンジンがまだ動いていれば何もしない／ヘッドホンなし（マイクモード）なら即停止／それ以外は `rebuildEngine()` で組み直し（`restartDates` で直近 `restartWindow`（2秒）内に `maxRestartsInWindow`（3回）まで。超えたら停止してエラー）。`rebuildEngine()` はセッションに触らず `connectGraph` → 目標値の即時反映 → 音量0 → `engine.start()` → `startFadeIn()`
+    - `isStarting`: `start()` の最中（権限ダイアログ待ち含む）に届いた通知は記録だけにする
+    - `start()`: Bluetooth 出力のときは IO バッファの希望を `preferredIOBufferDurationBluetooth`（約20ms）にする（カテゴリ設定後・有効化前に `refreshRoute()`）。有線は 5ms
+    - `refreshRoute()` / `start() async` / `stop()`（フェードアウト後に `performStop(reason: .user)`）/ `select(_:)` と private の `connectGraph` / `startFadeIn`（到達値は `outputCap` 以下）/ `teardown`（ランプを完了させる）/ `logAudioSession` / `deactivateSession`: 従来どおり
 - 依存: HearingProfile.swift、AVFoundation、AudioToolbox、Observation、os
 - 参照元: ContentView.swift、ProfileInfoSheet.swift、TuningPanel.swift
 

@@ -1,5 +1,37 @@
 # update.md — 進捗ログ（追記型・新しいものが上）
 
+## 2026-11-17 14:00 — Bluetooth ヘッドホンで開始するとすぐ止まる不具合の修正
+
+### 立案
+- 症状: iPad 実機で Bluetooth（A2DP 出力＋内蔵マイク）のとき、開始を押すと開始直後に必ず止まる（4回中4回）。開始時のログでは経路は設計どおり（inputs=MicrophoneBuiltIn outputs=BluetoothA2DPOutput、5.33ms / 48kHz）。停止の理由はログに出ていない。
+- 原因の見立て（コードから。実機ログで裏付けを取る）:
+  1. 通知は「開始が終わった後」に届く。セッション設定中に OS が出した通知（ルート変更・エンジン構成変更）は `queue: .main` と `Task { @MainActor }` を経由するため、`isRunning = true` になった後に処理される。
+  2. 構成変更の通知を受けると無条件で止めている（最有力）。A2DP で `setPreferredInput` を呼ぶと OS 側で入出力の組み直しが非同期で起き、`engine.start()` の後に `AVAudioEngineConfigurationChange` が届く。5ms バッファの希望も組み直しのきっかけになりうる。
+  3. ルート変更では、組み直しの途中で出力が一瞬空になると「マイクモードでヘッドホンなし」の保険で止まる可能性がある。
+- 方針（作者の方針: Bluetooth でも普通に体験できるように。有線推奨の注意は残す。安全方針は崩さない）:
+  - 全停止経路に理由つきのログ（StopReason）を入れ、受信した通知も止めなくてもログに出す。
+  - 構成変更は「止める」から「ヘッドホンが残っていれば組み直して 0 からフェードインで再開」に変更（2秒以内に3回で停止＋エラー）。
+  - ルート変更で即停止する条件を明文化（ヘッドホンが外れた／マイクモードでヘッドホンなし）。
+  - Bluetooth のときだけバッファの希望を 20ms に緩める。有線は 5ms のまま。
+- 影響範囲: HearingAudioEngine.swift、docs/design.md（4・5章）、docs/adr/0003、detail.md、tasks/todo.md、teach.md 第4章、docs/ai-usage-log.md、baton.md。
+- ブランチ: fix/bluetooth-start-stop を main から（PR #8 は自動クローズされ、同じ内容が PR #9 で main にマージ済みのため）。
+
+### 進捗
+- HearingAudioEngine.swift: `StopReason`、`performStop(reason:trigger:)`（全停止経路の入口）、受信ログ（ルート変更の理由名・割り込み・構成変更の動作）、`rebuildEngine()`（構成変更時の組み直し、2秒以内に3回まで）、`isStarting`、Bluetooth 時のバッファ約20ms を実装。
+- docs/design.md 4・5章、ADR-0003 追記、detail.md、tasks/todo.md、teach.md 第4章（4.7）、ai-usage-log、baton.md を更新。
+- xcodebuild: BUILD SUCCEEDED、自分たちのコードから警告なし。日本語 grep（swift ファイル）0件。
+- 残課題: 実機 Bluetooth での確認（下記）。
+
+### 実機 Bluetooth の確認手順（作者向け）
+1. Xcode で iPad に実行する。端末の音量は最小から始める。
+2. コンソール右下のフィルタに `audio` と入れる（HearingLens の audio ログだけ表示される）。
+3. 確認すること:
+   1. 開始して止まらないか
+   2. ヘッドホンを外すと即停止し、`stop reason=headphonesRemoved` が出るか
+   3. 稼働中にプロファイルを切り替えたり F-05 を操作しても止まらないか
+   4. 開始時に出る受信ログ（`received routeChange reason=...` / `received configurationChange ... action=rebuild`）をコピーして共有する
+   5. もし止まったら `stop reason=...` の行を共有する
+
 ## 2026-11-17 09:00 — ダークモードでスイッチの ON 表示が見えない不具合の修正
 
 ### 立案
