@@ -2,7 +2,8 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var engine = HearingAudioEngine()
+    /// The single engine owned by MyApp (shared by every window)
+    @Bindable var engine: HearingAudioEngine
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboarding = false
     @State private var showOnboarding = false
     @State private var showInfo = false
@@ -311,5 +312,5 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(engine: HearingAudioEngine())
 }

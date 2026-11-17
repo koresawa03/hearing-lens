@@ -1,5 +1,28 @@
 # update.md — 進捗ログ（追記型・新しいものが上）
 
+## 2026-11-17 15:00 — 音響エンジンが2つできている問題の調査と修正
+
+### 立案
+- 発見の経緯: 実機（iPad、Bluetooth）の確認で、ルート変更の受信ログが毎回2行（`running=true` と `running=false`）出た。通知を受け取る HearingAudioEngine が2つ生きている。
+- 調査結果（コードから）: 生成箇所は ContentView の `@State private var engine = HearingAudioEngine()` の1か所だけ。
+  - 候補1: iPad の複数ウインドウ。ビルドの Info.plist は `UIApplicationSupportsMultipleScenes = true`。ウインドウごとに ContentView ができ、それぞれがエンジンを持つ。
+  - 候補2: `@State` の初期化式の再評価。View の構造体が作られるたびに式が評価される（保持されるのは最初の1つ）。
+- 方針: MyApp が `@State` でエンジンを1つだけ持ち、ContentView に渡す（App はプロセスで1回だけ作られる）。エンジンに連番 ID を持たせ、生成/解放ログと、受信・停止ログに `engine=<id>` を付ける。複数ウインドウは許したまま共有する。
+- 影響範囲: MyApp.swift、ContentView.swift、HearingAudioEngine.swift、docs/design.md 4章、detail.md、tasks/todo.md、tasks/lessons.md、docs/ai-usage-log.md、baton.md。
+- ブランチ: fix/single-audio-engine（fix/bluetooth-start-stop から積み重ね。PR の base も fix/bluetooth-start-stop）。
+
+### 進捗
+- MyApp.swift が `@State` でエンジンを1つ所有し `ContentView(engine:)` に渡す。ContentView は `@Bindable var engine`。HearingAudioEngine に `instanceID`、`engine created/released id=<n>` ログ、受信・停止ログに `engine=<id>`。design.md 4章に一文。
+- xcodebuild: BUILD SUCCEEDED、自分たちのコードから警告なし。日本語 grep（swift ファイル）0件。
+- 残課題: シミュレーター・実機での確認（`engine created` が1回だけ、受信ログが1行ずつ）はメインが実施。
+
+### 進捗（確認結果）
+- シミュレーター: 起動時のログは `engine created id=1` のみ。
+- iPad 実機（2026-11-17 14:43〜14:49、Bluetooth A2DP、devicectl でコンソール取得）: `engine created id=1` のみで id=2 なし。すべての受信ログが engine=1。開始時（20ms / 48kHz、出力 Bluetooth、入力は内蔵マイク）の categoryChange 2行は両方 running=true で、OS が2回送った通知（以前は1回の通知につき2行＝エンジン2つ分だった）。約4分48秒停止せず、停止ボタンで `stop reason=user`。
+- 結論: エンジンはアプリで1つになった。修正前に2つあった原因は、iPad の複数ウインドウ（シーン）か @State 初期化式の再評価のどちらかで、今回の修正（MyApp が所有）で両方を塞いだ。どちらだったかの直接の証拠は、修正前のログに ID が無いため取れていない。
+
+### 完了（2026-11-17、実機確認済み）
+
 ## 2026-11-17 14:00 — Bluetooth ヘッドホンで開始するとすぐ止まる不具合の修正
 
 ### 立案

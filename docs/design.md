@@ -154,6 +154,8 @@ F-02 と同じ処理に、話し方のアドバイス（見出し: Tips for talk
 
 ## 4. オーディオ処理設計
 
+HearingAudioEngine はアプリに1つだけ作る（MyApp が @State で所有し、ContentView に渡す）。AVAudioSession もアプリで1つのため。iPad の複数ウインドウでも同じエンジンを共有する。
+
 ### ノードグラフ
 ```
 [マイク入力 AVAudioInputNode] ─┐
