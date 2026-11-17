@@ -96,9 +96,9 @@
 - 参照元: Xcode / Swift Playgrounds
 
 ### HearingLens.swiftpm/MyApp.swift
-- 役割: `@main` のエントリーポイント。`WindowGroup` で `ContentView` を表示（S-02）
-- 主要要素: `MyApp`（App）
-- 依存: ContentView.swift
+- 役割: `@main` のエントリーポイント。`HearingAudioEngine` をアプリで1つだけ `@State` で所有し、`WindowGroup` の `ContentView(engine:)` に渡す（S-02、F-06。iPad の複数ウインドウでも共有）
+- 主要要素: `MyApp`（App）、`engine`
+- 依存: ContentView.swift、HearingAudioEngine.swift
 - 参照元: なし（アプリ起点）
 
 ### HearingLens.swiftpm/HearingProfile.swift
@@ -116,6 +116,7 @@
 ### HearingLens.swiftpm/HearingAudioEngine.swift
 - 役割: F-01 フィルタ適用（ランプ付き）の音響エンジン、F-05 緩和の適用、F-06 ヘッドホン検知・割り込み処理、聴覚保護（ADR-0002）、低遅延・入力ルーティング（ADR-0003）。F-04（音量メーター）と F-07 の話し声は未実装
 - ノードグラフ: `inputNode`（マイク時のみ接続）/ `noiseNode`（`AVAudioSourceNode`、コード生成ピンクノイズ）→ `sourceMixer` → `eq`（5バンド固定: HPF×2・LPF×2・ピーク）→ `reverb` → `dynamics`（DynamicsProcessor。しきい値を調整できる）→ `limiter`（ピークリミッター）→ `mainMixerNode` → 出力。ノードは init で attach、`start()` で connect
+- 実例の数: アプリに1つだけ（MyApp が所有）。`instanceID`（連番）を持ち、生成時 `engine created id=<n>`・解放時 `engine released id=<n>` をログに出す。受信ログ（routeChange / interruption / configurationChange）・stop・ioBufferDuration の各行にも `engine=<id>` が付く
 - 主要要素:
   - `enum VolumeFeedback`（`.tooQuiet` / `.tooLoud` / `.good`）
   - `private enum EQRole`（`highPass` / `lowPass` / `peak`）と `bandIndex(_:stage:)`: 役割＋段番号からバンド番号を返す
@@ -163,7 +164,7 @@
 
 ### HearingLens.swiftpm/ContentView.swift
 - 役割: S-02 メイン画面（中央ビジュアル型・完全モノクロ・英語）。上から: 上部バー（モード文字切替 Everyday / Conversation と ⓘ）、`HeroSphereView`、プロファイル名＋`shortDescription`、（会話モードのみ）アドバイス1つ（タップで次へ）＋「Practice the tips」（`.toggleStyle(.monochrome)`）、プロファイル文字タブ、状態の1行、音量スライダー（最大値は `engine.outputCap`）＋丸い主ボタン
-- 主要要素: `ContentView`。`@State engine`、`@AppStorage("hasSeenOnboarding")`、`showOnboarding` / `showInfo` / `pendingIntroduction`（ⓘ シートが閉じてからオンボーディングを出し、シートが同時に2枚出ないようにする）、`tipIndex`（プロファイル変更で 0 に戻す）。選択状態は semibold＋前景100%＋下の点（`selectableText`）。状態の1行は優先順位: エラー → マイク拒否（「Open Settings」ボタン）→ Bluetooth → ヘッドホンなし案内 → 接続中 / Test Sound on。主ボタンは開始時 `Task { await engine.start() }`、`!canStart` または `isStopping` で無効化（塗りをやめ、前景の輪郭線＋補足色のアイコン）。プロファイル文字タブは右端を mask でフェード。ルートに `.tint(Theme.foreground)`、iPad では `Theme.maxContentWidth` で幅を制限。全体は `GeometryReader`＋縦 `ScrollView`（`minHeight` = 画面高、`.basedOnSize`）で、最大 Dynamic Type でも切れずにスクロールできる。アクセシビリティサイズでは中央ビジュアルを固定高（`Theme.heroAccessibilityHeight`）にし、主ボタンと状態行アイコンは `@ScaledMetric` で拡大（主ボタンは上限 1.4 倍）
+- 主要要素: `ContentView`。`@Bindable var engine`（MyApp から `ContentView(engine:)` で受け取る）、`@AppStorage("hasSeenOnboarding")`、`showOnboarding` / `showInfo` / `pendingIntroduction`（ⓘ シートが閉じてからオンボーディングを出し、シートが同時に2枚出ないようにする）、`tipIndex`（プロファイル変更で 0 に戻す）。選択状態は semibold＋前景100%＋下の点（`selectableText`）。状態の1行は優先順位: エラー → マイク拒否（「Open Settings」ボタン）→ Bluetooth → ヘッドホンなし案内 → 接続中 / Test Sound on。主ボタンは開始時 `Task { await engine.start() }`、`!canStart` または `isStopping` で無効化（塗りをやめ、前景の輪郭線＋補足色のアイコン）。プロファイル文字タブは右端を mask でフェード。ルートに `.tint(Theme.foreground)`、iPad では `Theme.maxContentWidth` で幅を制限。全体は `GeometryReader`＋縦 `ScrollView`（`minHeight` = 画面高、`.basedOnSize`）で、最大 Dynamic Type でも切れずにスクロールできる。アクセシビリティサイズでは中央ビジュアルを固定高（`Theme.heroAccessibilityHeight`）にし、主ボタンと状態行アイコンは `@ScaledMetric` で拡大（主ボタンは上限 1.4 倍）
 - 依存: HearingProfile.swift、HearingAudioEngine.swift、OnboardingView.swift、ProfileInfoSheet.swift、HeroSphereView.swift、Theme.swift
 - 参照元: MyApp.swift
 

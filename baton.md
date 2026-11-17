@@ -2,7 +2,10 @@
 
 最終更新: 2026-11-17
 
-0. **このセッションの更新（2026-11-17 14:40）**:
+00. **このセッションの更新（2026-11-17 15:00）**:
+   - 現在地: PR #10（`fix/bluetooth-start-stop`）と、その上に積んだ PR（`fix/single-audio-engine`、base は `fix/bluetooth-start-stop`）。後者は HearingAudioEngine を MyApp が1つだけ所有する修正。シミュレーターと iPad 実機（Bluetooth A2DP、約4分48秒）で確認済み（`engine created id=1` のみ、受信ログはすべて engine=1）。この PR は実機確認済み。
+   - 次にやること: ①PR #10 を `--delete-branch` なしでマージ ②この PR の base が main に変わったことを `gh pr view` で確認 ③この PR をマージ ④古いブランチを削除（tasks/lessons.md 参照）⑤フェーズ3（F-02 日常モード）。
+0. **（1つ前）更新（2026-11-17 14:40）**:
    - 現在地: PR #10（`fix/bluetooth-start-stop`）。Bluetooth で開始直後に止まる不具合の修正を実機（iPad、Bluetooth A2DP）で確認済み。約6分止まらず、ヘッドホンを外すと `stop reason=headphonesRemoved` で即停止。
    - 次にやること: ①PR #10 をマージ ②HearingAudioEngine が2つ生成されている問題の調査（ルート変更ログが毎回2行。ContentView の `@State private var engine = HearingAudioEngine()` の初期化式が View 再生成のたびに評価されている疑い。tasks/todo.md に登録済み）③その後フェーズ3（F-02 日常モード）。
 1. **現在地（それ以前）**:

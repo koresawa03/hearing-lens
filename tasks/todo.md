@@ -68,7 +68,8 @@
 - [x] Bluetooth のときはバッファの希望を約20msに緩める
 - [x] design.md 4・5章、ADR-0003 追記
 - [x] 実機 Bluetooth で確認（2026-11-17 iPad で止まらないこと・外すと即停止を確認。update.md の同エントリ）
-- [ ] HearingAudioEngine が2つ生成されている問題の調査（ContentView の @State 初期化）
+- [x] HearingAudioEngine が2つ生成されている問題の調査と修正（MyApp が1つだけ所有、生成/解放ログ、engine ID）
+  - [x] 実機で受信ログが1行ずつか確認（2026-11-17 iPad 実機で確認済み）
 
 ## フェーズ3: 日常モード（F-02）
 - [ ] F-02 マイク → フィルタ → ヘッドホンの通し動作

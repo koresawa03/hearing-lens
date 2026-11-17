@@ -20,8 +20,9 @@
 //   A user-initiated stop uses a short fade-out; unplugging headphones and interruptions stop immediately.
 // - Engine configuration change: if headphones are still connected (or test sound), rebuild the graph and resume from 0 with a fade-in
 //   (limited to maxRestartsInWindow rebuilds per restartWindow); otherwise stop immediately.
-// - Every stop path goes through performStop(reason:trigger:), which logs "stop reason=... trigger=... outputs=... inputs=..." (category "audio").
-//   Received route changes, interruptions and configuration changes are also logged even when nothing stops.
+// - Every stop path goes through performStop(reason:trigger:), which logs "stop engine=<id> reason=... trigger=... outputs=... inputs=..." (category "audio").
+//   Received route changes, interruptions and configuration changes are also logged even when nothing stops (all carry engine=<id>).
+// - Only one engine exists per app (owned by MyApp). Creation and release are logged as "engine created id=<n>" / "engine released id=<n>".
 import AVFoundation
 import AudioToolbox
 import Observation
@@ -370,7 +371,15 @@ final class HearingAudioEngine {
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var configurationObserver: NSObjectProtocol?
 
+    /// Next instance number. The engine must be created only once; the log shows if a second one appears
+    private static var nextID = 1
+    /// Number of this instance (for logs). A plain Int, so deinit (nonisolated) can read it
+    let instanceID: Int
+
     init() {
+        instanceID = Self.nextID
+        Self.nextID += 1
+        audioLogger.info("engine created id=\(self.instanceID, privacy: .public)")
         let sessionRate = AVAudioSession.sharedInstance().sampleRate
         let rate = sessionRate > 0 ? sessionRate : Self.fallbackSampleRate
         // Creating an AVAudioFormat rarely fails, but fall back instead of force-unwrapping
@@ -418,6 +427,10 @@ final class HearingAudioEngine {
                 self?.handleConfigurationChange()
             }
         }
+    }
+
+    deinit {
+        audioLogger.info("engine released id=\(self.instanceID, privacy: .public)")
     }
 
     /// Attaches nodes to the engine and sets initial EQ, dynamics and limiter values (connecting happens in start)
@@ -696,7 +709,7 @@ final class HearingAudioEngine {
         let reason = reasonValue.flatMap { AVAudioSession.RouteChangeReason(rawValue: $0) }
         let reasonName = routeChangeReasonName(reason)
         let (outputs, inputs) = routeDescription()
-        audioLogger.info("received routeChange reason=\(reasonName, privacy: .public) running=\(self.isRunning, privacy: .public) starting=\(self.isStarting, privacy: .public) headphones=\(self.isHeadphoneConnected, privacy: .public) outputs=\(outputs, privacy: .public) inputs=\(inputs, privacy: .public)")
+        audioLogger.info("received routeChange engine=\(self.instanceID, privacy: .public) reason=\(reasonName, privacy: .public) running=\(self.isRunning, privacy: .public) starting=\(self.isStarting, privacy: .public) headphones=\(self.isHeadphoneConnected, privacy: .public) outputs=\(outputs, privacy: .public) inputs=\(inputs, privacy: .public)")
         // Not running, or start() is waiting at the permission dialog: only record it
         guard isRunning, !isStarting else { return }
         // Stop condition 1. Headphones removed: stop immediately without fading, to prevent feedback
@@ -716,7 +729,7 @@ final class HearingAudioEngine {
     private func handleInterruption(typeValue: UInt?) {
         guard let typeValue, let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
         let typeName = type == .began ? "began" : "ended"
-        audioLogger.info("received interruption type=\(typeName, privacy: .public) running=\(self.isRunning, privacy: .public)")
+        audioLogger.info("received interruption engine=\(self.instanceID, privacy: .public) type=\(typeName, privacy: .public) running=\(self.isRunning, privacy: .public)")
         // Stop immediately when it begins. When it ends, do not resume automatically (to avoid sudden sound); wait for the user
         if type == .began && isRunning {
             performStop(reason: .interruption, trigger: "interruption:began")
@@ -729,16 +742,16 @@ final class HearingAudioEngine {
     private func handleConfigurationChange() {
         let engineRunning = engine.isRunning
         guard isRunning, !isStarting, !isStopping else {
-            audioLogger.info("received configurationChange engineRunning=\(engineRunning, privacy: .public) running=\(self.isRunning, privacy: .public) starting=\(self.isStarting, privacy: .public) action=ignored(not active)")
+            audioLogger.info("received configurationChange engine=\(self.instanceID, privacy: .public) engineRunning=\(engineRunning, privacy: .public) running=\(self.isRunning, privacy: .public) starting=\(self.isStarting, privacy: .public) action=ignored(not active)")
             return
         }
         guard !engineRunning else {
-            audioLogger.info("received configurationChange engineRunning=true action=ignored(engine still running)")
+            audioLogger.info("received configurationChange engine=\(self.instanceID, privacy: .public) engineRunning=true action=ignored(engine still running)")
             return
         }
         refreshRoute()
         guard useTestSource || isHeadphoneConnected else {
-            audioLogger.info("received configurationChange engineRunning=false action=stop(no headphones)")
+            audioLogger.info("received configurationChange engine=\(self.instanceID, privacy: .public) engineRunning=false action=stop(no headphones)")
             performStop(reason: .configurationChange, trigger: "configurationChange")
             return
         }
@@ -747,14 +760,14 @@ final class HearingAudioEngine {
         let now = Date()
         restartDates.removeAll { now.timeIntervalSince($0) > Self.restartWindow }
         guard restartDates.count < Self.maxRestartsInWindow else {
-            audioLogger.info("received configurationChange engineRunning=false action=stop(restart limit)")
+            audioLogger.info("received configurationChange engine=\(self.instanceID, privacy: .public) engineRunning=false action=stop(restart limit)")
             lastErrorMessage = "Audio output keeps changing. Please try again."
             performStop(reason: .restartLimit, trigger: "configurationChange")
             return
         }
         restartDates.append(now)
 
-        audioLogger.info("received configurationChange engineRunning=false action=rebuild(\(self.restartDates.count, privacy: .public)/\(Self.maxRestartsInWindow, privacy: .public))")
+        audioLogger.info("received configurationChange engine=\(self.instanceID, privacy: .public) engineRunning=false action=rebuild(\(self.restartDates.count, privacy: .public)/\(Self.maxRestartsInWindow, privacy: .public))")
         do {
             try rebuildEngine()
         } catch {
@@ -882,7 +895,7 @@ final class HearingAudioEngine {
     /// (A user stop fades out first in stop(), then arrives here.)
     private func performStop(reason: StopReason, trigger: String) {
         let (outputs, inputs) = routeDescription()
-        audioLogger.info("stop reason=\(reason.rawValue, privacy: .public) trigger=\(trigger, privacy: .public) outputs=\(outputs, privacy: .public) inputs=\(inputs, privacy: .public)")
+        audioLogger.info("stop engine=\(self.instanceID, privacy: .public) reason=\(reason.rawValue, privacy: .public) trigger=\(trigger, privacy: .public) outputs=\(outputs, privacy: .public) inputs=\(inputs, privacy: .public)")
         teardown()
     }
 
@@ -969,7 +982,7 @@ final class HearingAudioEngine {
         let outputs = route.outputs.map { $0.portType.rawValue }.joined(separator: ",")
         let ioBuffer = session.ioBufferDuration
         let sampleRate = session.sampleRate
-        audioLogger.info("ioBufferDuration=\(ioBuffer, privacy: .public)s sampleRate=\(sampleRate, privacy: .public)Hz inputs=\(inputs, privacy: .public) outputs=\(outputs, privacy: .public)")
+        audioLogger.info("engine=\(self.instanceID, privacy: .public) ioBufferDuration=\(ioBuffer, privacy: .public)s sampleRate=\(sampleRate, privacy: .public)Hz inputs=\(inputs, privacy: .public) outputs=\(outputs, privacy: .public)")
     }
 
     /// Closes the session. Notifies others so other apps' audio resumes. A failure is not fatal, so it is ignored
