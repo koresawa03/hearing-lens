@@ -217,6 +217,7 @@ LPF / HPF は1段だと 12dB/oct で効きが弱いので、**同じ値の2段�
 - 自分の声が遅れて返ってくると話しにくくなる（遅延聴覚フィードバック、DAF）。会話モードの体験の核なので、遅延を減らす
 - `setPreferredIOBufferDuration` で IO バッファを小さくする（約5ms、定数）。`setPreferredSampleRate` は 48kHz（定数）
 - OS が希望どおりにしないことがあるため、`setActive(true)` の後に実際に適用された `ioBufferDuration` と `sampleRate` をデバッグ用にログ出力する（`os.Logger`、category は "audio"）
+- Bluetooth 出力のときは、カテゴリ設定後に出力を確認し、バッファの希望を約20ms（定数）に緩める。Bluetooth 自体の遅延（約150〜250ms）に比べて小さく、5ms の希望が OS 側の組み直しを引き起こすのを避けるため。有線は 5ms のまま
 - 詳細と他の案は ADR-0003
 
 ### AVAudioSession
@@ -231,7 +232,8 @@ LPF / HPF は1段だと 12dB/oct で効きが弱いので、**同じ値の2段�
 - `.playAndRecord` で `.defaultToSpeaker` なしだと、ヘッドホンがないとき通話用の受話口から出てほとんど聞こえない。テスト音源はマイクを使わないので `.playback` にして内蔵スピーカーから鳴らす（ヘッドホンなしの審査員向け）。ハウリングの心配はない
 - 稼働中に `useTestSource` を切り替えたら停止する（カテゴリが食い違わないように）。自動再開はしない。再開はユーザーの操作
 - 両方で `setPreferredSampleRate` と `setPreferredIOBufferDuration` を設定する
-- `AVAudioEngineConfigurationChange`（入出力フォーマットの変化などでエンジンが自分で止まる通知）を購読し、フェードなしで即停止して状態を戻す。自動再開はしない
+- `AVAudioEngineConfigurationChange`（入出力フォーマットの変化などでエンジンが自分で止まる通知）を購読する。ヘッドホンが残っている（またはテスト音源）なら、エンジンを組み直して 0 からフェードインで再開する（下記「構成変更の処理」）
+- セッション設定中に出た通知は、開始処理が終わった後に処理される（`queue: .main` と `Task { @MainActor }` を経由するため）。そのため時間で通知を無視する方法は取らず、通知の内容と現在の状態で判断する
 
 ### 入力は内蔵マイクに固定
 - マイク体験では `availableInputs` から `.builtInMic` を探して `setPreferredInput` で指定する
@@ -241,7 +243,8 @@ LPF / HPF は1段だと 12dB/oct で効きが弱いので、**同じ値の2段�
 
 ### 停止の仕方
 - ユーザー操作の停止: 出力音量を短くフェードアウト（約0.15秒）してから停止する
-- ヘッドホン抜去・割り込み・構成変更: フェードなしで**即停止**する（ハウリング防止・安全のほうがクリック音より優先）
+- ヘッドホン抜去・割り込み・（ヘッドホンがない場合の）構成変更: フェードなしで**即停止**する（ハウリング防止・安全のほうがクリック音より優先）
+- すべての停止は理由つきで1行ログに出す（`stop reason=... trigger=... outputs=... inputs=...`。理由: user / headphonesRemoved / noHeadphonesAfterRouteChange / interruption / configurationChange / startFailure / restartLimit）
 - フェードアウト中は開始・再停止の操作を受け付けない（UI のボタンも無効にする）
 
 ### ルート変更の処理（F-06）
@@ -249,8 +252,17 @@ LPF / HPF は1段だと 12dB/oct で効きが弱いので、**同じ値の2段�
 - 現在のルートの出力に、ヘッドホン系ポート（`.headphones` / `.bluetoothA2DP` / `.bluetoothLE` / `.usbAudio`）があるかで `isHeadphoneConnected` を更新する
 - reason が `.oldDeviceUnavailable` でヘッドホンがなくなった → 即停止
 - reason が `.newDeviceAvailable`（ヘッドホン接続）→ 状態の更新のみ。自動で開始しない
-- 保険: マイクモード稼働中にヘッドホンが無くなったら、理由に関係なく即停止する
+- 保険: マイクモード稼働中にヘッドホンが無くなったら、理由に関係なく即停止する（確認には `refreshRoute()` の値を使う）
+- 即停止する条件はこの2つだけ（開始処理の途中で届いた通知は記録だけにする）
 - テスト音源モードはマイクを使わないので、ヘッドホンが外れても止めない
+- 受け取った通知は、止めない場合も理由名をログに出す（実機での原因調査用）
+
+### 構成変更の処理
+- 通知を受けたとき `engine.isRunning` が true なら、何もせずログだけ出す
+- ヘッドホンが残っている（またはテスト音源）: セッションのカテゴリや有効化には触らず、`engine.stop()` → グラフを接続し直す → 目標値を即反映 → 出力音量 0 → `engine.start()` → フェードイン、で再開する（ループを避けるため）
+- ヘッドホンがない（マイクモード）: 即停止（理由 configurationChange）
+- 組み直しが短時間に続く場合（2秒以内に3回組み直しても収まらず、さらに通知が来たとき）は停止して "Audio output keeps changing. Please try again." を表示する（理由 restartLimit）
+- 組み直しに失敗したら停止して既存のエラー文言を表示する（理由 startFailure）
 
 ### 割り込み
 - `AVAudioSession.interruptionNotification` を購読する
@@ -268,8 +280,8 @@ LPF / HPF は1段だと 12dB/oct で効きが弱いので、**同じ値の2段�
 | ルート変更（抜去: `oldDeviceUnavailable`） | ヘッドホンがなくなったら即停止 |
 | ルート変更（接続: `newDeviceAvailable`） | 状態の更新のみ。自動で再生しない（ユーザー操作を待つ） |
 | 稼働中にテスト音源の ON/OFF を切り替え | 即停止（再開はユーザー操作） |
-| Bluetooth 接続 | 遅延の注意（約150ms）と有線推奨を表示。入力は内蔵マイク、出力のみ A2DP |
-| エンジン構成変更（AVAudioEngineConfigurationChange） | 即停止して状態を戻す。自動再開しない |
+| Bluetooth 接続 | 遅延の注意（約150ms）と有線推奨を表示（継続）。入力は内蔵マイク、出力のみ A2DP。バッファは約20msを希望（有線は5ms） |
+| エンジン構成変更（AVAudioEngineConfigurationChange） | ヘッドホンが残っていれば組み直してフェードインで再開。2秒以内に3回組み直しても収まらなければ停止してエラー表示。ヘッドホンがなければ即停止 |
 | エンジン起動失敗 | エラーを表示し停止状態に戻す（クラッシュしない） |
 
 ## 6. 要検討
