@@ -32,6 +32,17 @@
    4. 開始時に出る受信ログ（`received routeChange reason=...` / `received configurationChange ... action=rebuild`）をコピーして共有する
    5. もし止まったら `stop reason=...` の行を共有する
 
+### 進捗（実機確認 2026-11-17 14:31〜14:38、iPad Pro 11-inch 第4世代、Bluetooth A2DP ヘッドホン、xcrun devicectl でコンソール取得）
+- 14:31:58 開始: ioBufferDuration=0.020000s、sampleRate=48000Hz、出力 BluetoothA2DPOutput、入力 MicrophoneBuiltIn（Bluetooth 時 20ms の希望が反映された）。
+- 直後に routeChange reason=categoryChange が2回。headphones=true のため停止しなかった。configurationChange は engineRunning=true で ignored。
+- 約6分間、停止なし（作者がプロファイル切替も実施）。
+- 14:38:08 ヘッドホンを外す: routeChange reason=oldDeviceUnavailable、出力 Speaker → 1ms 以内に `stop reason=headphonesRemoved`（安全方針どおり即停止）。
+- 結論: 修正後は Bluetooth で止まらない。旧コードの停止は、開始直後の通知（構成変更／ルート変更）を受けた停止処理と考えられる（旧コードには停止理由ログがなく、どちらだったかの直接の証拠はない）。
+- 新たな発見（未対応）: ルート変更のログが毎回2行ずつ（running=true と running=false）出る。HearingAudioEngine のインスタンスが2つ存在し、両方が通知を受けている。原因の候補: ContentView の `@State private var engine = HearingAudioEngine()` が View の再生成のたびに初期化式を評価し、余分なインスタンスが残っている（通知の監視が生きている）可能性。動作への実害は今回なかったが、次の作業で調査する。
+
+### 完了
+- Bluetooth で開始直後に止まる不具合の修正は実機で確認済み。二重インスタンスの件は別件として tasks/todo.md で管理する。
+
 ## 2026-11-17 09:00 — ダークモードでスイッチの ON 表示が見えない不具合の修正
 
 ### 立案
