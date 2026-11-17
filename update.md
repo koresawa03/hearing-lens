@@ -1,5 +1,25 @@
 # update.md — 進捗ログ（追記型・新しいものが上）
 
+## 2026-11-17 09:00 — ダークモードでスイッチの ON 表示が見えない不具合の修正
+
+### 立案
+- 依頼: ダークモードで ON のスイッチが見えない不具合を「ここで直す」。
+- 原因: 画面全体に `.tint(Theme.foreground)` を掛けているため、ダークでは ON のトラックが白になり、白いノブと同化する（PR #4 からの不具合）。
+- 方針: `Theme.swift` にモノクロ専用の `MonochromeToggleStyle` を作る。ON = 前景色のトラック＋背景色のノブ、OFF = 細い輪郭線のトラック＋補足色のノブ。状態はノブの位置と塗り/輪郭で示す（色に頼らない）。対象は 2 スイッチ（ⓘ シートの Test Sound、会話モードの Practice the tips）。`.tint` はスライダーにも効くので残す。
+- あわせて: ai-usage-log の作者欄を【作者が記入】に統一、CLAUDE.md のルール文の修正、aim.md の現在のフォーカス更新、baton.md の更新。
+- 影響範囲: Theme.swift、ContentView.swift、ProfileInfoSheet.swift、docs/design.md（3章）、detail.md、tasks/todo.md、docs/ai-usage-log.md、CLAUDE.md（1行）、aim.md、baton.md。
+- ブランチ: fix/dark-mode-toggle（feat/f01-filter-tuning から積み重ね）
+
+### 進捗
+- Theme.swift に `MonochromeToggleStyle`（と `.monochrome`）と `toggle*` 定数を追加。Test Sound（ProfileInfoSheet.swift）と Practice the tips（ContentView.swift）に適用。
+- OFF の輪郭線の不透明度 0.5 のコントラスト比: ダーク約 5.3:1、ライト約 3.5:1（どちらも 3:1 以上）。ON のノブ対トラック: ダーク約 19:1、ライト約 17:1。
+- xcodebuild: BUILD SUCCEEDED、自分たちのコードから警告なし。日本語 grep（swift ファイル）0件。
+- docs/design.md 3章、detail.md、tasks/todo.md、ai-usage-log（表記統一＋1行追記）、CLAUDE.md の1行、aim.md、baton.md を更新。
+- 残課題: シミュレーターでのスクリーンショット確認（メインが実施）。
+
+### 完了
+- 実装とドキュメント更新は完了（スクリーンショット確認はメインが実施）。
+
 ## 2026-11-16 10:00 — フェーズ2-B: フィルタの作り込み（ランプ・2段フィルタ・F-05・調整パネル）
 
 ### 立案

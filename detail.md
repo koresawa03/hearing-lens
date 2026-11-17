@@ -138,6 +138,7 @@
 - 役割: 完全モノクロ UI（ADR-0004）の色・余白・サイズ・字間・アイコンのウェイトを一か所に集約する。他のファイルは色や余白の数値を直書きせず `Theme` を参照する
 - 主要要素:
   - `enum Theme`: `background`（ダーク #0E0E10 / ライト #F5F5F3）、`foreground`（ダーク 白 / ライト #111111）。どちらも `UIColor` の dynamic provider で OS のライト/ダークに連動（アセットカタログなし）。`secondary`（前景 65%。コントラスト比は ダーク約 8.4:1・ライト約 5.7:1）、`line`（前景 25%）、余白スケール（`spaceXS`〜`spaceXL`）、`cornerRadius`、線の太さ、`maxContentWidth`（520）、`heroMinHeight`、`heroAccessibilityHeight`、`tabFadeWidth`、`disabledOutlineOpacity`（0.5。ダーク約 5.3:1・ライト約 3.5:1）、`outlineLineWidth`、`mainButtonDiameter`（72）、`selectedDotSize`、`minTouchTarget`、`headingTracking`（1.5）、`symbolWeight`。`extension Theme` の `enum Sphere`（球体の大きさ・グラデーション階調・縁・ハイライト・影・呼吸の定数）と `enum Ripple`（波紋の本数・縦横比・不透明度・線幅・周期・level による変化の定数）
+  - `struct MonochromeToggleStyle: ToggleStyle`（`.toggleStyle(.monochrome)`）: モノクロ専用スイッチ。ON = 前景色のトラック＋背景色のノブ、OFF = 輪郭線（`toggleOffOutlineOpacity` 0.5。ダーク約 5.3:1・ライト約 3.5:1）のトラック＋補足色のノブ。行全体をタップでき（44pt 以上）、Reduce Motion ではアニメーションしない。VoiceOver は `accessibilityRepresentation` で通常の Toggle として読む。寸法・アニメ時間は `Theme.toggle*` 定数
   - `extension View { func themeHeading() }`: 小見出しの共通スタイル
 - 依存: SwiftUI、UIKit
 - 参照元: ContentView.swift、OnboardingView.swift、ProfileInfoSheet.swift、HeroSphereView.swift
@@ -150,12 +151,12 @@
 
 ### HearingLens.swiftpm/ProfileInfoSheet.swift
 - 役割: S-02 の ⓘ ボタンで開くシート。選択中プロファイルの詳細、Test Sound、オンボーディング再表示
-- 主要要素: `struct ProfileInfoSheet`（`@Bindable engine`、`onShowIntroduction` クロージャ）。見出し「Common among」「How it sounds」「Tips for talking」、近似の注意、`Toggle("Test Sound")`（`engine.useTestSource`）と説明、「Show Introduction Again」、`TuningConfig.isEnabled` のときだけ `TuningPanel`、「Done」。スクロール可、Dynamic Type 対応
+- 主要要素: `struct ProfileInfoSheet`（`@Bindable engine`、`onShowIntroduction` クロージャ）。見出し「Common among」「How it sounds」「Tips for talking」、近似の注意、`Toggle("Test Sound")`（`engine.useTestSource`、`.toggleStyle(.monochrome)`）と説明、「Show Introduction Again」、`TuningConfig.isEnabled` のときだけ `TuningPanel`、「Done」。スクロール可、Dynamic Type 対応
 - 依存: HearingAudioEngine.swift、HearingProfile.swift、Theme.swift、TuningConfig.swift、TuningPanel.swift
 - 参照元: ContentView.swift（`.sheet`）
 
 ### HearingLens.swiftpm/ContentView.swift
-- 役割: S-02 メイン画面（中央ビジュアル型・完全モノクロ・英語）。上から: 上部バー（モード文字切替 Everyday / Conversation と ⓘ）、`HeroSphereView`、プロファイル名＋`shortDescription`、（会話モードのみ）アドバイス1つ（タップで次へ）＋「Practice the tips」、プロファイル文字タブ、状態の1行、音量スライダー（最大値は `engine.outputCap`）＋丸い主ボタン
+- 役割: S-02 メイン画面（中央ビジュアル型・完全モノクロ・英語）。上から: 上部バー（モード文字切替 Everyday / Conversation と ⓘ）、`HeroSphereView`、プロファイル名＋`shortDescription`、（会話モードのみ）アドバイス1つ（タップで次へ）＋「Practice the tips」（`.toggleStyle(.monochrome)`）、プロファイル文字タブ、状態の1行、音量スライダー（最大値は `engine.outputCap`）＋丸い主ボタン
 - 主要要素: `ContentView`。`@State engine`、`@AppStorage("hasSeenOnboarding")`、`showOnboarding` / `showInfo` / `pendingIntroduction`（ⓘ シートが閉じてからオンボーディングを出し、シートが同時に2枚出ないようにする）、`tipIndex`（プロファイル変更で 0 に戻す）。選択状態は semibold＋前景100%＋下の点（`selectableText`）。状態の1行は優先順位: エラー → マイク拒否（「Open Settings」ボタン）→ Bluetooth → ヘッドホンなし案内 → 接続中 / Test Sound on。主ボタンは開始時 `Task { await engine.start() }`、`!canStart` または `isStopping` で無効化（塗りをやめ、前景の輪郭線＋補足色のアイコン）。プロファイル文字タブは右端を mask でフェード。ルートに `.tint(Theme.foreground)`、iPad では `Theme.maxContentWidth` で幅を制限。全体は `GeometryReader`＋縦 `ScrollView`（`minHeight` = 画面高、`.basedOnSize`）で、最大 Dynamic Type でも切れずにスクロールできる。アクセシビリティサイズでは中央ビジュアルを固定高（`Theme.heroAccessibilityHeight`）にし、主ボタンと状態行アイコンは `@ScaledMetric` で拡大（主ボタンは上限 1.4 倍）
 - 依存: HearingProfile.swift、HearingAudioEngine.swift、OnboardingView.swift、ProfileInfoSheet.swift、HeroSphereView.swift、Theme.swift
 - 参照元: MyApp.swift

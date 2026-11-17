@@ -35,6 +35,7 @@
 - [x] 無効ボタンを輪郭線に変更（コントラスト比 ダーク約 5.3:1 / ライト約 3.5:1）
 - [x] 注意文を "Plug in headphones or use Test Sound (ⓘ)" に短縮し、折り返しを許可
 - [x] docs/design.md 3章、teach.md 第5章コラム、detail.md を更新
+- [x] ダークモードでスイッチの ON 表示が見えない不具合を修正（`MonochromeToggleStyle`。Test Sound と Practice the tips に適用）
 - [x] xcodebuild BUILD SUCCEEDED、日本語 grep 0件
 - [ ] 実機での 60fps 確認（iPhone 12 等の古め端末）
 - [ ] Accessibility Inspector Audit（ユーザー）
