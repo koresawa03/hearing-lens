@@ -43,6 +43,7 @@ struct ProfileInfoSheet: View {
                 // F-07 Test Sound
                 VStack(alignment: .leading, spacing: Theme.spaceXS) {
                     Toggle("Test Sound", isOn: $engine.useTestSource)
+                        .toggleStyle(.monochrome)
                         .font(.body)
                         .foregroundStyle(Theme.foreground)
                     Text("Plays a built-in sound through the speaker — no headphones or microphone needed.")

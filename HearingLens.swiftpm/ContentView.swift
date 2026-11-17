@@ -183,6 +183,7 @@ struct ContentView: View {
             .accessibilityHint("Double-tap for the next tip")
 
             Toggle("Practice the tips", isOn: $engine.isAdviceApplied)
+                .toggleStyle(.monochrome)
                 .font(.body)
                 .foregroundStyle(Theme.foreground)
         }

@@ -42,6 +42,21 @@ enum Theme {
     /// Line width of the disabled button outline
     static let outlineLineWidth: CGFloat = 1.5
 
+    // MARK: Switch (MonochromeToggleStyle)
+    /// Outline opacity of an OFF switch track (foreground over background).
+    /// Non-text UI needs at least 3 : 1 (WCAG 1.4.11). Computed contrast of the blended outline:
+    ///   dark  (white at 0.5 over #0E0E10): about 5.3 : 1
+    ///   light (#111111 at 0.5 over #F5F5F3): about 3.5 : 1
+    /// ON state: knob (background color) on the filled track (foreground color): about 19 : 1 dark, 17 : 1 light.
+    static let toggleOffOutlineOpacity: Double = 0.5
+    /// Track size (same as the system switch)
+    static let toggleTrackWidth: CGFloat = 51
+    static let toggleTrackHeight: CGFloat = 31
+    /// Gap between the knob and the track edge
+    static let toggleKnobInset: CGFloat = 3
+    /// Seconds for the knob to slide (skipped when Reduce Motion is on)
+    static let toggleAnimationDuration: Double = 0.15
+
     // MARK: Spacing scale
     static let spaceXS: CGFloat = 4
     static let spaceS: CGFloat = 8
@@ -204,4 +219,50 @@ extension View {
             .foregroundStyle(Theme.secondary)
             .accessibilityAddTraits(.isHeader)
     }
+}
+
+// MARK: - Monochrome switch
+/// Switch that stays visible in both appearances (ADR-0004).
+/// ON = filled track + background-colored knob, OFF = outlined track + secondary knob.
+/// State is shown by the knob position and fill/outline, not by color alone.
+struct MonochromeToggleStyle: ToggleStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        let knobSize = Theme.toggleTrackHeight - Theme.toggleKnobInset * 2
+        let travel = Theme.toggleTrackWidth - Theme.toggleTrackHeight
+        let isOn = configuration.isOn
+
+        return HStack {
+            configuration.label
+            Spacer()
+            ZStack(alignment: .leading) {
+                if isOn {
+                    Capsule().fill(Theme.foreground)
+                } else {
+                    Capsule().strokeBorder(
+                        Theme.foreground.opacity(Theme.toggleOffOutlineOpacity),
+                        lineWidth: Theme.outlineLineWidth
+                    )
+                }
+                Circle()
+                    .fill(isOn ? Theme.background : Theme.secondary)
+                    .frame(width: knobSize, height: knobSize)
+                    .offset(x: Theme.toggleKnobInset + (isOn ? travel : 0))
+            }
+            .frame(width: Theme.toggleTrackWidth, height: Theme.toggleTrackHeight)
+            .animation(reduceMotion ? nil : .easeInOut(duration: Theme.toggleAnimationDuration), value: isOn)
+        }
+        .frame(minHeight: Theme.minTouchTarget)
+        .contentShape(Rectangle())
+        .onTapGesture { configuration.isOn.toggle() }
+        // Keep VoiceOver reading this as a system switch (on / off)
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+        }
+    }
+}
+
+extension ToggleStyle where Self == MonochromeToggleStyle {
+    static var monochrome: MonochromeToggleStyle { MonochromeToggleStyle() }
 }
